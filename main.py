@@ -1,59 +1,41 @@
+import os
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions 
-import InvalidSignatureError
+from linebot.exceptions import InvalidSignatureError
 from linebot.models import *
-import os
-import psycopg2
-from pymongo import MongoClient
+from pymongo import MongoClient  # ใช้ MongoDB แทน psycopg2
 import datetime
 import random
 
 app = Flask(__name__)
 
-# [1] CONFIG
-# ดึงค่าจาก Environment Variables บน Render
+# [1] CONFIG ดึงค่าจาก Environment Variables บน Render
 TOKEN = os.environ.get("TOKEN")
 SECRET = os.environ.get("SECRET")
-MONGO_URI = os.environ.get("MONGO_URI")
+MONGO_URI = os.environ.get("MONGO_URI") # ต้องตั้งค่าใน Render ก่อน
 
 line_bot_api = LineBotApi(TOKEN)
 handler = WebhookHandler(SECRET)
 
-# [2] DATABASE SYSTEM (PostgreSQL)
-# เชื่อมต่อกับ MongoDB Atlas
+# [2] DATABASE SYSTEM (MongoDB Atlas)
 client = MongoClient(MONGO_URI)
-db = client['m29_smart_classroom']  # ชื่อฐานข้อมูล
-homework_col = db['homework']       # สำหรับเก็บข้อมูลการบ้าน
-user_col = db['user_state']        # สำหรับเก็บสถานะผู้ใช้
+db = client['m29_smart_classroom']
+homework_col = db['homework']       # เก็บข้อมูลการบ้าน
+user_col = db['user_state']         # เก็บสถานะผู้ใช้ (state, step, temp)
 
-# สร้างตารางการบ้าน
-    c.execute("""CREATE TABLE IF NOT EXISTS homework (
-        id SERIAL PRIMARY KEY, 
-        info TEXT, 
-        teacher TEXT, 
-        created_at TEXT)""")
-    conn.commit()
-    c.close()
-    conn.close()
-
-def check_and_reset_weekly(c):
+def check_and_reset_weekly():
+    """ ระบบล้างข้อมูลการบ้านทุกสัปดาห์ (วันอาทิตย์) """
     current_week = datetime.datetime.now().isocalendar()[1]
-    c.execute("SELECT created_at FROM homework ORDER BY id DESC LIMIT 1")
-    last_entry = c.fetchone()
+    last_entry = homework_col.find_one(sort=[("_id", -1)])
     if last_entry:
         try:
-            last_date_str = last_entry[0].split(" ")[0]
+            last_date_str = last_entry['created_at'].split(" ")[0]
             last_week = datetime.datetime.strptime(last_date_str, "%Y-%m-%d").isocalendar()[1]
             if current_week != last_week:
-                c.execute("DELETE FROM homework")
+                homework_col.delete_many({}) # ลบทั้งหมดถ้าข้ามสัปดาห์
                 return True
-        except:
-            pass
+        except: pass
     return False
-
-# เรียกใช้งาน Database ครั้งแรก
-Init_db()
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -72,20 +54,18 @@ def handle_message(event):
     now = datetime.datetime.now()
     today_en = now.strftime("%A")
     
-    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
-    c = conn.cursor()
-    
-    check_and_reset_weekly(c)
-    conn.commit()
+    # ตรวจสอบการรีเซ็ตรายสัปดาห์
+    check_and_reset_weekly()
 
-    c.execute("SELECT state, step, temp FROM user_state WHERE user_id = %s", (uid,))
-    row = c.fetchone()
-    state, step, temp = (row[0], row[1], row[2]) if row else (None, 0, "")
+    # ดึงสถานะผู้ใช้จาก MongoDB
+    user_data = user_col.find_one({"user_id": uid})
+    state = user_data.get('state') if user_data else None
+    step = user_data.get('step', 0) if user_data else 0
+    temp = user_data.get('temp', "") if user_data else ""
 
     # --- [3] MENU SYSTEM ---
     if text in ["เมนู", "หน้า 1", "ยกเลิก"]:
-        c.execute("DELETE FROM user_state WHERE user_id = %s", (uid,))
-        conn.commit()
+        user_col.delete_one({"user_id": uid})
         menu1 = {
             "type": "bubble",
             "header": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "🌸 ม.2/9 Menu (1/2)", "weight": "bold", "size": "xl", "color": "#1DB446"}]},
@@ -113,36 +93,33 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Menu 2", contents=menu2))
         return
 
-    # --- [4] HOMEWORK SYSTEM ---
+    # --- [4] HOMEWORK SYSTEM (ย้ายมาใช้ MongoDB) ---
     if text == "แจ้งการบ้าน":
-        c.execute("INSERT INTO user_state (user_id, state, step, temp) VALUES (%s, %s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET state='HW', step=1", (uid, 'HW', 1, ""))
+        user_col.update_one({"user_id": uid}, {"$set": {"state": "HW", "step": 1, "temp": ""}}, upsert=True)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📝 [1/2] พิมพ์ วิชา / งาน / วันส่ง"))
-        conn.commit()
 
     elif state == "HW":
         if step == 1:
-            c.execute("UPDATE user_state SET step = 2, temp = %s WHERE user_id = %s", (text, uid))
+            user_col.update_one({"user_id": uid}, {"$set": {"step": 2, "temp": text}})
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👨‍🏫 [2/2] ครูท่านไหนสั่งครับ?"))
         elif step == 2:
             time_now = now.strftime("%Y-%m-%d %H:%M")
-            c.execute("INSERT INTO homework (info, teacher, created_at) VALUES (%s, %s, %s)", (temp, text, time_now))
-            c.execute("DELETE FROM user_state WHERE user_id = %s", (uid,))
+            homework_col.insert_one({"info": temp, "teacher": text, "created_at": time_now})
+            user_col.delete_one({"user_id": uid})
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกข้อมูลเรียบร้อยแล้ว (เช็คได้ที่เมนู 'เช็คงาน')"))
-        conn.commit()
 
     elif text == "เช็คงาน":
         days_map = {"Monday": "วันจันทร์", "Tuesday": "วันอังคาร", "Wednesday": "วันพุธ", "Thursday": "วันพฤหัสบดี", "Friday": "วันศุกร์"}
-        c.execute("SELECT info, created_at FROM homework")
-        all_hw = c.fetchall()
+        all_hw = list(homework_col.find())
         report = "📊 สรุปการบ้านสัปดาห์นี้\n"
         found = False
         for en, th in days_map.items():
             header = f"\n📌 {th}" + (" (วันนี้)" if en == today_en else "")
             day_content = ""
-            for hw_info, created_at in all_hw:
-                db_day = datetime.datetime.strptime(created_at, "%Y-%m-%d %H:%M").strftime("%A")
+            for hw in all_hw:
+                db_day = datetime.datetime.strptime(hw['created_at'], "%Y-%m-%d %H:%M").strftime("%A")
                 if db_day == en:
-                    day_content += f"- {hw_info}\n"
+                    day_content += f"- {hw['info']} (ครู{hw['teacher']})\n"
                     found = True
             if day_content: report += header + "\n" + day_content
         if not found: report += "\n✨ ยังไม่มีข้อมูล/ยังไม่ได้สั่งจ้า"
@@ -150,9 +127,8 @@ def handle_message(event):
 
     # --- [5] RANDOM & OTHERS ---
     elif text == "สุ่มจัดกลุ่ม":
-        c.execute("INSERT INTO user_state (user_id, state, step, temp) VALUES (%s, %s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET state='GROUP', step=1", (uid, 'GROUP', 1, ""))
+        user_col.update_one({"user_id": uid}, {"$set": {"state": "GROUP", "step": 1}}, upsert=True)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👥 อยากแบ่งเป็นกี่กลุ่มครับ? (พิมพ์ตัวเลขกลุ่ม)"))
-        conn.commit()
 
     elif state == "GROUP":
         try:
@@ -166,8 +142,7 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
         except:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์เป็นตัวเลขครับ"))
-        c.execute("DELETE FROM user_state WHERE user_id = %s", (uid,))
-        conn.commit()
+        user_col.delete_one({"user_id": uid})
 
     elif text == "สุ่มเลขที่":
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🎲 เลขที่ {random.randint(1, 40)}"))
@@ -187,9 +162,7 @@ def handle_message(event):
         help_text = "📖 สรุปวิธีใช้งานบอท ม.2/9\n\n📝 แจ้งการบ้าน: กดแล้วพิมพ์ 'วิชา/งาน/วันส่ง' และระบุชื่อครู\n📋 เช็คงาน: ดูสรุปงานสัปดาห์นี้ (ล้างทุกวันอาทิตย์อัตโนมัติ)\n🎲 สุ่มเลขที่: สุ่มเพื่อน 1 คนจากเลขที่ 1-40\n👥 สุ่มจัดกลุ่ม: ระบุจำนวนกลุ่มที่ต้องการ แล้วบอทจะแบ่งเลขที่ให้\n📅 ตารางเรียน: ดูวิชาเรียนหลักของวันนี้\n\n⚠️ หากบอทค้างหรือพิมพ์ผิด ให้พิมพ์ 'ยกเลิก' เพื่อเริ่มใหม่"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_text))
 
-    c.close()
-    conn.close()
-
 if __name__ == "__main__":
-    app.run(port=5000)
-
+    # รันบนพอร์ต 5000 ตามที่ Render ต้องการ
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
