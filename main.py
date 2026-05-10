@@ -21,7 +21,7 @@ handler = WebhookHandler(SECRET)
 
 # [2] DATABASE SYSTEM (PostgreSQL)
 def Init_db():
-    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+    conn = psycopg2.connect(DATABASE_URL)
     c = conn.cursor()
     # สร้างตารางสถานะผู้ใช้
     c.execute("""CREATE TABLE IF NOT EXISTS user_state (
