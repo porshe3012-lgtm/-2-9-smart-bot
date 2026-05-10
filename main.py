@@ -1,10 +1,11 @@
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
+from linebot.exceptions 
+import InvalidSignatureError
 from linebot.models import *
 import os
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from pymongo import MongoClient
 import datetime
 import random
 
@@ -14,22 +15,19 @@ app = Flask(__name__)
 # ดึงค่าจาก Environment Variables บน Render
 TOKEN = os.environ.get("TOKEN")
 SECRET = os.environ.get("SECRET")
-DATABASE_URL = os.environ.get("DATABASE_URL")
+MONGO_URI = os.environ.get("MONGO_URI")
 
 line_bot_api = LineBotApi(TOKEN)
 handler = WebhookHandler(SECRET)
 
 # [2] DATABASE SYSTEM (PostgreSQL)
-def Init_db():
-    conn = psycopg2.connect(DATABASE_URL)
-    c = conn.cursor()
-    # สร้างตารางสถานะผู้ใช้
-    c.execute("""CREATE TABLE IF NOT EXISTS user_state (
-        user_id TEXT PRIMARY KEY, 
-        state TEXT, 
-        step INTEGER, 
-        temp TEXT)""")
-    # สร้างตารางการบ้าน
+# เชื่อมต่อกับ MongoDB Atlas
+client = MongoClient(MONGO_URI)
+db = client['m29_smart_classroom']  # ชื่อฐานข้อมูล
+homework_col = db['homework']       # สำหรับเก็บข้อมูลการบ้าน
+user_col = db['user_state']        # สำหรับเก็บสถานะผู้ใช้
+
+# สร้างตารางการบ้าน
     c.execute("""CREATE TABLE IF NOT EXISTS homework (
         id SERIAL PRIMARY KEY, 
         info TEXT, 
