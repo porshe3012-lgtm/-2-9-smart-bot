@@ -1,0 +1,170 @@
+
+    <h1>โค้ดระบบบอท ม.2/9 Smart Classroom (Python + SQLite)</h1>
+    <p>ไฟล์นี้ประกอบด้วยโค้ดทั้งหมดที่คุณต้องการสำหรับรันบอทใน Termux โดยแบ่งเป็นส่วนการตั้งค่าฐานข้อมูล และส่วนหลักของบอท</p>
+
+    <h2>1. การเตรียมฐานข้อมูล (database_setup.py)</h2>
+    <p>รันไฟล์นี้เพียงครั้งเดียวเพื่อสร้างตารางที่จำเป็นทั้งหมด</p>
+    <pre style="background-color: #f4f4f4; padding: 15px; border-radius: 5px;">
+import sqlite3
+
+def init_db():
+    conn = sqlite3.connect('classroom.db')
+    cursor = conn.cursor()
+
+    # ตารางการบ้าน
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS homework (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject TEXT,
+        details TEXT,
+        deadline TEXT,
+        status TEXT DEFAULT 'pending'
+    )''')
+
+    # ตารางเวรยกหนังสือ
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS book_duty (
+        id INTEGER PRIMARY KEY,
+        last_student_index INTEGER
+    )''')
+    cursor.execute('INSERT OR IGNORE INTO book_duty (id, last_student_index) VALUES (1, 0)')
+
+    # ตารางตารางเรียน (ตัวอย่างสำหรับวิชา ส22101)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS schedule (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        day TEXT,
+        time TEXT,
+        subject_code TEXT
+    )''')
+    
+    # เพิ่มข้อมูลตารางเรียนวิชาสังคม/ประวัติ
+    schedule_data = [
+        ('จันทร์', '12:10', 'ส22101'),
+        ('อังคาร', '13:00', 'ส22101'),
+        ('พุธ', '12:10', 'ส22101'),
+        ('ศุกร์', '09:40', 'ส22101')
+    ]
+    cursor.executemany('INSERT INTO schedule (day, time, subject_code) VALUES (?, ?, ?)', schedule_data)
+
+    conn.commit()
+    conn.close()
+    print("Database Initialized Successfully!")
+
+if __name__ == "__main__":
+    init_db()
+    </pre>
+
+    <h2>2. โค้ดหลักของบอท (main.py)</h2>
+    <p>อย่าลืมเปลี่ยน <b>YOUR_CHANNEL_ACCESS_TOKEN</b> เป็นโทเค็นของคุณ</p>
+    <pre style="background-color: #f4f4f4; padding: 15px; border-radius: 5px;">
+from flask import Flask, request, abort
+import sqlite3
+import random
+import requests
+import json
+
+app = Flask(__name__)
+
+# --- ตั้งค่า LINE API ---
+ACCESS_TOKEN = 'f/Xqv41nZMttKsSkhmOPaHM7iHXbbTJh2CeGx6d9c5V/2cSbDn5RFGth5hL0YxN/TExannSHHo6oid5RdB R3STFPX/6qHarNCsyM4YKtyCJGYjENz9cuxjUk943xMOrKA9EI3uc3nUk mzzKB NChanQdB04t89/10/w1cDnyilFU='
+
+def send_message(reply_token, text):
+    url = 'https://api.line.me/v2/bot/message/reply'
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {ACCESS_TOKEN}'
+    }
+    data = {
+        'replyToken': reply_token,
+        'messages': [{'type': 'text', 'text': text}]
+    }
+    requests.post(url, headers=headers, data=json.dumps(data))
+
+# --- ฟังก์ชันระบบต่างๆ ---
+
+def get_book_duty():
+    conn = sqlite3.connect('classroom.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT last_student_index FROM book_duty WHERE id = 1')
+    last_idx = cursor.fetchone()[0]
+    
+    # รันเลขที่ถัดไป 2 คน
+    s1 = (last_idx % 40) + 1
+    s2 = (s1 % 40) + 1
+    
+    # อัปเดตเลขที่ล่าสุดลงฐานข้อมูล
+    cursor.execute('UPDATE book_duty SET last_student_index = ? WHERE id = 1', (s2,))
+    conn.commit()
+    conn.close()
+    return f"📖 เวรยกหนังสือวิชา ส22101 คาบนี้:\nเลขที่ {s1} และ {s2} ครับ"
+
+def random_student():
+    num = random.randint(1, 40)
+    return f"🎲 ผู้โชคดีจากการสุ่มคือเลขที่: {num} 🎉"
+
+def add_homework(details):
+    # ตัวอย่างการรับค่า: "คณิต หน้า 5 ส่งพรุ่งนี้"
+    try:
+        parts = details.split(' ')
+        subject = parts[0]
+        work = parts[1]
+        conn = sqlite3.connect('classroom.db')
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO homework (subject, details) VALUES (?, ?)', (subject, work))
+        conn.commit()
+        conn.close()
+        return f"✅ บันทึกงานวิชา {subject} เรียบร้อยแล้ว!"
+    except:
+        return "❌ รูปแบบผิด! โปรดพิมพ์: เพิ่มงาน [วิชา] [รายละเอียด]"
+
+def list_homework():
+    conn = sqlite3.connect('classroom.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT subject, details FROM homework WHERE status = 'pending'")
+    rows = cursor.fetchall()
+    conn.close()
+    if not rows: return "ตอนนี้ไม่มีงานค้างครับ! ✨"
+    res = "📌 รายการงานที่ต้องส่ง:\n"
+    for r in rows:
+        res += f"- {r[0]}: {r[1]}\n"
+    return res
+
+# --- Webhook Receiver ---
+
+@app.route("/callback", methods=['POST'])
+def callback():
+    body = request.get_data(as_text=True)
+    data = json.loads(body)
+    
+    for event in data['events']:
+        if event['type'] == 'message':
+            msg_text = event['message']['text']
+            reply_token = event['replyToken']
+            
+            if msg_text == 'ใครยกหนังสือ':
+                send_message(reply_token, get_book_duty())
+            elif msg_text == 'สุ่มเลขที่':
+                send_message(reply_token, random_student())
+            elif msg_text == 'ดูการบ้าน':
+                send_message(reply_token, list_homework())
+            elif msg_text.startswith('เพิ่มงาน'):
+                content = msg_text.replace('เพิ่มงาน', '').strip()
+                send_message(reply_token, add_homework(content))
+            else:
+                send_message(reply_token, "สวัสดีครับ! ผมบอท ม.2/9\nลองกดปุ่มเมนูหรือพิมพ์ 'ดูการบ้าน' นะครับ")
+                
+    return 'OK'
+
+if __name__ == "__main__":
+    app.run(port=5000)
+    </pre>
+
+    <h2>3. ขั้นตอนการรันบอท</h2>
+    <ol>
+        <li>ติดตั้ง Library: <code>pip install flask requests</code></li>
+        <li>รันฐานข้อมูล: <code>python database_setup.py</code></li>
+        <li>เปิดบอท: <code>python main.py</code></li>
+        <li>ใช้ <b>ngrok</b> เพื่อเปิด Webhook: <code>ngrok http 5000</code> แล้วนำ URL ที่ได้ไปใส่ใน LINE Developers Console</li>
+    </ol>
+    
