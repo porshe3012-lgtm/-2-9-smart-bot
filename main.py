@@ -86,6 +86,7 @@ def handle_message(event):
             "body": {"type": "box", "layout": "vertical", "spacing": "md", "contents": [
                 {"type": "button", "style": "primary", "color": "#F39C12", "action": {"type": "message", "label": "📖 ตารางเรียนวันนี้", "text": "ตารางเรียน"}},
                 {"type": "button", "style": "primary", "color": "#F39C12", "action": {"type": "message", "label": "🎲 สุ่มเลขที่", "text": "สุ่มเลขที่"}},
+                   {"type": "button", "style": "primary", "color": "#F39C12", "action": {"type": "message", "label": "📚 เวนยกหนังสือ", "text": "เวนยกหนังสือ"}},
                 {"type": "button", "style": "primary", "color": "#F39C12", "action": {"type": "message", "label": "👥 สุ่มจัดกลุ่ม", "text": "สุ่มจัดกลุ่ม"}},
                 {"type": "button", "style": "secondary", "action": {"type": "message", "label": "⬅️ หน้า 1", "text": "หน้า 1"}}
             ]}
@@ -161,6 +162,11 @@ def handle_message(event):
     elif text == "วิธีใช้":
         help_text = "📖 สรุปวิธีใช้งานบอท ม.2/9\n\n📝 แจ้งการบ้าน: กดแล้วพิมพ์ 'วิชา/งาน/วันส่ง' และระบุชื่อครู\n📋 เช็คงาน: ดูสรุปงานสัปดาห์นี้ (ล้างทุกวันอาทิตย์อัตโนมัติ)\n🎲 สุ่มเลขที่: สุ่มเพื่อน 1 คนจากเลขที่ 1-40\n👥 สุ่มจัดกลุ่ม: ระบุจำนวนกลุ่มที่ต้องการ แล้วบอทจะแบ่งเลขที่ให้\n📅 ตารางเรียน: ดูวิชาเรียนหลักของวันนี้\n\n⚠️ หากบอทค้างหรือพิมพ์ผิด ให้พิมพ์ 'ยกเลิก' เพื่อเริ่มใหม่"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_text))
+elif text == "ติดต่อแอดมิน":
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text="📱 หากมีปัญหาการใช้งานหรือต้องการสอบถามเพิ่มเติม\nสามารถติดต่อแอดมินได้ที่: [porshe3012] ครับ")
+    )
 
 if __name__ == "__main__":
     # รันบนพอร์ต 5000 ตามที่ Render ต้องการ
