@@ -76,13 +76,13 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Menu 2", contents=menu2))
         return
 
-    # --- [4] ระบบเวนยกหนังสือ & ติดต่อแอดมิน & วิธีใช้ ---
+    # --- [4] ระบบวิธีใช้, เวนยกหนังสือ, ติดต่อแอดมิน ---
     elif text == "วิธีใช้":
         how_to = (
             "📖 สรุปวิธีใช้งานบอท ม.2/9\n"
             "--------------------------\n"
             "📝 แจ้งการบ้าน: กดแล้วพิมพ์ 'วิชา/งาน/กำหนดส่ง' และระบุชื่อครู\n"
-            "📋 เช็คงาน: ดูสรุปงานสัปดาห์นี้ (ล้างทุกวันจันทร์อัตโนมัติ)\n"
+            "📋 เช็คงาน: ดูสรุปงานสัปดาห์นี้ (แยกรายวัน จ-ศ)\n"
             "🎲 สุ่มเลขที่: สุ่มเพื่อน 1 คนจากเลขที่ 1-40\n"
             "📚 เวนยกหนังสือ: สุ่มเพื่อน 2 คนมาช่วยงาน\n"
             "👥 สุ่มจัดกลุ่ม: ระบุจำนวนกลุ่มที่ต้องการ แล้วบอทจะแบ่งเลขที่ให้\n"
@@ -101,10 +101,10 @@ def handle_message(event):
         res = "📱 ติดต่อแอดมิน (พชรภัทร)\n📞 เบอร์โทร: 0954672577\n🆔 LINE ID: porshe3012\n\nสามารถพิมพ์ข้อความทิ้งไว้ได้เลยครับ!"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
 
-    # --- [5] HOMEWORK SYSTEM ---
+    # --- [5] HOMEWORK SYSTEM (บันทึกและเช็คงานแยกวัน) ---
     elif text == "แจ้งการบ้าน":
         user_col.update_one({"user_id": uid}, {"$set": {"state": "HW", "step": 1, "temp": ""}}, upsert=True)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📝 [1/2] พิมพ์ วิชา / งาน / วันส่ง"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📝 [1/2] พิมพ์ วิชา / งาน / วันส่ง\n(อย่าลืมพิมพ์ชื่อวัน เช่น วันจันทร์ เพื่อให้ระบบแยกตารางให้ครับ)"))
 
     elif state == "HW":
         if step == 1:
@@ -116,10 +116,9 @@ def handle_message(event):
             user_col.delete_one({"user_id": uid})
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกเรียบร้อย! เช็คได้ที่เมนู 'เช็คงาน'"))
 
-        elif text == "เช็คงาน":
+    elif text == "เช็คงาน":
         all_hw = list(homework_col.find())
         days = ["วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์"]
-        
         report = "📋 สรุปการบ้านสัปดาห์นี้\n"
         hw_by_day = {day: [] for day in days}
         
@@ -132,7 +131,6 @@ def handle_message(event):
                     found_day = True
                     break
             if not found_day:
-                # ถ้าไม่ระบุวัน ให้ไปรวมไว้ที่วันจันทร์เป็นค่าเริ่มต้น
                 hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")
         
         for day in days:
@@ -142,10 +140,7 @@ def handle_message(event):
             else:
                 report += "ยังไม่มีข้อมูล/ยังไม่ได้แจ้ง\n"
         
-        # บรรทัดนี้ต้องย่อหน้า (Indent) เท่ากับแนวของ for ด้านบนเป๊ะๆ นะครับ
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
-
-
 
     # --- [6] RANDOM & OTHERS ---
     elif text == "สุ่มจัดกลุ่ม":
