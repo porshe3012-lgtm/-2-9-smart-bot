@@ -116,38 +116,34 @@ def handle_message(event):
             user_col.delete_one({"user_id": uid})
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกเรียบร้อย! เช็คได้ที่เมนู 'เช็คงาน'"))
 
-        elif text == "เช็คงาน":
+            elif text == "เช็คงาน":
         all_hw = list(homework_col.find())
-        # กำหนดรายชื่อวันเพื่อใช้เป็นหัวข้อ
         days = ["วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์"]
         
         report = "📋 สรุปการบ้านสัปดาห์นี้\n"
-        
-        # สร้างพจนานุกรม (Dictionary) เพื่อเก็บงานแยกตามวัน
         hw_by_day = {day: [] for day in days}
         
         for hw in all_hw:
             info = hw['info']
-            # ตรวจสอบว่าในข้อมูลที่บันทึกมา มีการระบุชื่อวันไว้ไหม
             found_day = False
             for day in days:
                 if day in info:
                     hw_by_day[day].append(f"📌 {info} (ครู{hw['teacher']})")
                     found_day = True
                     break
-            
-            # ถ้าไม่ได้ระบุวันในข้อความ ให้พยายามเดาจากวันที่บันทึก (Optional) 
-            # หรือในที่นี้จะปล่อยให้ไปแสดงในหัวข้อที่ตรงกันเท่านั้น
+            if not found_day:
+                hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")
         
-        # สร้างข้อความรายงานแยกตามวันตามรูปแบบที่ต้องการ
         for day in days:
-            report += f"\n📌 {day}\n"
+            report += f"\n📍 {day}\n"
             if hw_by_day[day]:
                 report += "\n".join(hw_by_day[day]) + "\n"
             else:
                 report += "ยังไม่มีข้อมูล/ยังไม่ได้แจ้ง\n"
-                
+        
+        # บรรทัดนี้ต้องย่อหน้าเท่ากับ for ด้านบน เพื่อให้ส่งข้อความแค่ครั้งเดียว
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
+
 
     # --- [6] RANDOM & OTHERS ---
     elif text == "สุ่มจัดกลุ่ม":
