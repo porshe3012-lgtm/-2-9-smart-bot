@@ -116,7 +116,7 @@ def handle_message(event):
             user_col.delete_one({"user_id": uid})
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกเรียบร้อย! เช็คได้ที่เมนู 'เช็คงาน'"))
 
-            elif text == "เช็คงาน":
+        elif text == "เช็คงาน":
         all_hw = list(homework_col.find())
         days = ["วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์"]
         
@@ -132,6 +132,7 @@ def handle_message(event):
                     found_day = True
                     break
             if not found_day:
+                # ถ้าไม่ระบุวัน ให้ไปรวมไว้ที่วันจันทร์เป็นค่าเริ่มต้น
                 hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")
         
         for day in days:
@@ -141,8 +142,9 @@ def handle_message(event):
             else:
                 report += "ยังไม่มีข้อมูล/ยังไม่ได้แจ้ง\n"
         
-        # บรรทัดนี้ต้องย่อหน้าเท่ากับ for ด้านบน เพื่อให้ส่งข้อความแค่ครั้งเดียว
+        # บรรทัดนี้ต้องย่อหน้า (Indent) เท่ากับแนวของ for ด้านบนเป๊ะๆ นะครับ
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
+
 
 
     # --- [6] RANDOM & OTHERS ---
