@@ -159,30 +159,6 @@ def handle_message(event):
                     break
             if not found_day:
                 hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")          
-    elif text == "เช็คตารางสอบ":
-         exam_col = db['exams']
-        # ดึงข้อมูลสอบทั้งหมด เรียงจากใหม่ไปเก่า (ลิมิตไว้ 10 รายการล่าสุด)
-        all_exams = list(exam_col.find().sort("_id", -1).limit(10))
-        
-        if not all_exams:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🎉 เย้! ยังไม่มีนัดหมายสอบในตอนนี้ครับ"))
-        else:
-            report = "📅 ตารางสอบ ม.2/9\n"
-            report += "--------------------------\n"
-            for ex in all_exams:
-                report += f"📝 {ex['subject_info']}\n⏰ {ex['date_time']}\n"
-                report += "--------------------------\n"
-            
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
-            
-        for day in days:
-            report += f"\n📍 {day}\n"
-            if hw_by_day[day]:
-                report += "\n".join(hw_by_day[day]) + "\n"
-            else:
-                report += "ยังไม่มีข้อมูล/ยังไม่ได้แจ้ง\n"
-        
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
 
     # --- [6] RANDOM & OTHERS ---
     elif text == "สุ่มจัดกลุ่ม":
