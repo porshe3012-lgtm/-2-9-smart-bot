@@ -118,6 +118,31 @@ def handle_message(event):
             user_col.delete_one({"user_id": uid})
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกเรียบร้อย! เช็คได้ที่เมนู 'เช็คงาน'"))
 
+    # --- [5.1] EXAM SYSTEM (ระบบแจ้งสอบ) ---
+    elif text == "แจ้งสอบ":
+        user_col.update_one({"user_id": uid}, {"$set": {"state": "EXAM", "step": 1, "temp": ""}}, upsert=True)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📢 [1/2] พิมพ์ วิชา และ เรื่องที่สอบ\n(เช่น คณิต - เลขยกกำลัง)"))
+        return
+
+    elif state == "EXAM":
+        if step == 1:
+            # เก็บข้อมูลวิชาไว้ใน temp แล้วขยับไป step 2
+            user_col.update_one({"user_id": uid}, {"$set": {"step": 2, "temp": text}})
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📅 [2/2] สอบวันไหนและคาบไหนครับ?\n(เช่น วันศุกร์ที่ 20 คาบ 3-4)"))
+        
+        elif step == 2:
+            # บันทึกลง Database
+            exam_col = db['exams'] # สร้าง collection ใหม่ชื่อ exams
+            exam_col.insert_one({
+                "subject_info": temp,
+                "date_time": text,
+                "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            })
+            # ลบ State ของผู้ใช้ทิ้งเพื่อให้กลับสู่สภาวะปกติ
+            user_col.delete_one({"user_id": uid})
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกตารางสอบเรียบร้อยแล้ว! สู้ๆ นะทุกคน ✌️"))
+        return
+
     elif text == "เช็คงาน":
         all_hw = list(homework_col.find())
         days = ["วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์"]
@@ -134,7 +159,22 @@ def handle_message(event):
                     break
             if not found_day:
                 hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")
+        elif text == "เช็คตารางสอบ":
+        exam_col = db['exams']
+        # ดึงข้อมูลสอบทั้งหมด เรียงจากใหม่ไปเก่า (ลิมิตไว้ 10 รายการล่าสุด)
+        all_exams = list(exam_col.find().sort("_id", -1).limit(10))
         
+        if not all_exams:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🎉 เย้! ยังไม่มีนัดหมายสอบในตอนนี้ครับ"))
+        else:
+            report = "📅 ตารางสอบ ม.2/9\n"
+            report += "--------------------------\n"
+            for ex in all_exams:
+                report += f"📝 {ex['subject_info']}\n⏰ {ex['date_time']}\n"
+                report += "--------------------------\n"
+            
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
+            
         for day in days:
             report += f"\n📍 {day}\n"
             if hw_by_day[day]:
