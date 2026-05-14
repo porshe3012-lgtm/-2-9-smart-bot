@@ -158,9 +158,9 @@ def handle_message(event):
                     found_day = True
                     break
             if not found_day:
-                hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")
-        elif text == "เช็คตารางสอบ":
-        exam_col = db['exams']
+                hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")          
+    elif text == "เช็คตารางสอบ":
+         exam_col = db['exams']
         # ดึงข้อมูลสอบทั้งหมด เรียงจากใหม่ไปเก่า (ลิมิตไว้ 10 รายการล่าสุด)
         all_exams = list(exam_col.find().sort("_id", -1).limit(10))
         
