@@ -22,6 +22,7 @@ client = MongoClient(MONGO_URI)
 db = client['m29_smart_classroom']
 homework_col = db['homework']
 user_col = db['user_state']
+exam_col = db['exams'] # เพิ่ม collection สำหรับตารางสอบ
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -85,9 +86,11 @@ def handle_message(event):
             "--------------------------\n"
             "📝 แจ้งการบ้าน: กดแล้วพิมพ์ 'วิชา/งาน/กำหนดส่ง' และระบุชื่อครู\n"
             "📋 เช็คงาน: ดูสรุปงานสัปดาห์นี้ (แยกรายวัน จ-ศ)\n"
+            "📢 แจ้งสอบ: บันทึกวิชาและวันสอบ\n"
+            "📅 ตารางสอบ: เช็คตารางสอบที่เพื่อนแจ้งไว้\n"
             "🎲 สุ่มเลขที่: สุ่มเพื่อน 1 คนจากเลขที่ 1-40\n"
             "📚 เวนยกหนังสือ: สุ่มเพื่อน 2 คนมาช่วยงาน\n"
-            "👥 สุ่มจัดกลุ่ม: ระบุจำนวนกลุ่มที่ต้องการ แล้วบอทจะแบ่งเลขที่ให้\n"
+            "👥 สุ่มจัดกลุ่ม: ระบุจำนวนกลุ่มที่ต้องการ แล้วบอทจะแบ่งให้\n"
             "📅 ตารางเรียน: ดูวิชาเรียนตามวันจริงของวันนี้\n"
             "--------------------------\n"
             "⚠️ หากบอทค้างหรือพิมพ์ผิด ให้พิมพ์ 'ยกเลิก' เพื่อเริ่มใหม่"
@@ -118,31 +121,6 @@ def handle_message(event):
             user_col.delete_one({"user_id": uid})
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกเรียบร้อย! เช็คได้ที่เมนู 'เช็คงาน'"))
 
-    # --- [5.1] EXAM SYSTEM (ระบบแจ้งสอบ) ---
-    elif text == "แจ้งสอบ":
-        user_col.update_one({"user_id": uid}, {"$set": {"state": "EXAM", "step": 1, "temp": ""}}, upsert=True)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📢 [1/2] พิมพ์ วิชา และ เรื่องที่สอบ\n(เช่น คณิต - เลขยกกำลัง)"))
-        return
-
-    elif state == "EXAM":
-        if step == 1:
-            # เก็บข้อมูลวิชาไว้ใน temp แล้วขยับไป step 2
-            user_col.update_one({"user_id": uid}, {"$set": {"step": 2, "temp": text}})
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📅 [2/2] สอบวันไหนและคาบไหนครับ?\n(เช่น วันศุกร์ที่ 20 คาบ 3-4)"))
-        
-        elif step == 2:
-            # บันทึกลง Database
-            exam_col = db['exams'] # สร้าง collection ใหม่ชื่อ exams
-            exam_col.insert_one({
-                "subject_info": temp,
-                "date_time": text,
-                "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-            })
-            # ลบ State ของผู้ใช้ทิ้งเพื่อให้กลับสู่สภาวะปกติ
-            user_col.delete_one({"user_id": uid})
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกตารางสอบเรียบร้อยแล้ว! สู้ๆ นะทุกคน ✌️"))
-        return
-
     elif text == "เช็คงาน":
         all_hw = list(homework_col.find())
         days = ["วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์"]
@@ -158,7 +136,49 @@ def handle_message(event):
                     found_day = True
                     break
             if not found_day:
-                hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")          
+                hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")
+                
+        # [ส่วนที่ถูกเติม] เพื่อให้บอทแสดงผลและส่งข้อความกลับ
+        for day in days:
+            report += f"\n📍 {day}\n"
+            if hw_by_day[day]:
+                report += "\n".join(hw_by_day[day]) + "\n"
+            else:
+                report += "ยังไม่มีข้อมูล/ยังไม่ได้แจ้ง\n"
+        
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
+
+    # --- [5.1] EXAM SYSTEM (ระบบแจ้งสอบและเช็คตารางสอบ) ---
+    elif text == "แจ้งสอบ":
+        user_col.update_one({"user_id": uid}, {"$set": {"state": "EXAM", "step": 1, "temp": ""}}, upsert=True)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📢 [1/2] พิมพ์ วิชา และ เรื่องที่สอบ\n(เช่น คณิต - เลขยกกำลัง)"))
+        return
+
+    elif state == "EXAM":
+        if step == 1:
+            user_col.update_one({"user_id": uid}, {"$set": {"step": 2, "temp": text}})
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📅 [2/2] สอบวันไหนและคาบไหนครับ?\n(เช่น วันศุกร์ที่ 20 คาบ 3-4)"))
+        elif step == 2:
+            exam_col.insert_one({
+                "subject_info": temp,
+                "date_time": text,
+                "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            })
+            user_col.delete_one({"user_id": uid})
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกตารางสอบเรียบร้อยแล้ว! สู้ๆ นะทุกคน ✌️"))
+        return
+
+    # [ส่วนที่ถูกเติม] รองรับปุ่ม "เช็คตารางสอบ" ในหน้า 2
+    elif text == "เช็คตารางสอบ":
+        all_exams = list(exam_col.find())
+        if not all_exams:
+            report = "✨ ตอนนี้ยังไม่มีแจ้งสอบจ้า"
+        else:
+            report = "📅 ตารางสอบที่แจ้งไว้\n"
+            for ex in all_exams:
+                report += f"\n📌 {ex['subject_info']}\n⏰ {ex['date_time']}\n"
+        
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
 
     # --- [6] RANDOM & OTHERS ---
     elif text == "สุ่มจัดกลุ่ม":
