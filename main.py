@@ -6,6 +6,7 @@ from linebot.models import *
 from pymongo import MongoClient
 import datetime
 import random
+import time
 
 app = Flask(__name__)
 
@@ -17,15 +18,22 @@ MONGO_URI = os.environ.get("MONGO_URI")
 line_bot_api = LineBotApi(TOKEN)
 handler = WebhookHandler(SECRET)
 
-# --- [2] DATABASE SYSTEM (MongoDB Atlas) ---
+# --- [2] DATABASE SYSTEM ---
 try:
     client = MongoClient(MONGO_URI)
     db = client['m29_smart_classroom']
     homework_col = db['homework']
     user_col = db['user_state']
-    exam_col = db['exams'] # collection สำหรับตารางสอบ
+    exam_col = db['exams']
 except Exception as e:
     print(f"DB Error: {e}")
+
+# --- [0] ADVANCED ANTI-SPAM CONFIG ---
+# ระบบ Burst Cooldown: ยอมให้กดรัวได้ในช่วงแรก แต่ถ้าเกินขีดจำกัดต้องรอ
+user_spam_filter = {} 
+BURST_LIMIT = 5        # กดรัวติดต่อกันได้ 5 ครั้งแรก
+COOLDOWN_TIME = 0.8    # หลังจากครั้งที่ 5 ต้องรอ 0.8 วินาทีต่อการส่ง 1 ครั้ง
+RESET_THRESHOLD = 2.0  # ถ้าหยุดพิมพ์เกิน 2 วินาที จะรีเซ็ตโควตาการกดรัวใหม่
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -40,10 +48,35 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     uid = event.source.user_id
-    # ใช้ .strip() เพื่อตัดช่องว่างหน้า-หลังทิ้ง ป้องกันเพื่อนพิมพ์ "เมนู " แล้วบอทไม่ตอบ
-    text = event.message.text.strip() 
+    current_time = time.time()
     
-    # [FIX] บังคับเวลาให้เป็นเวลาประเทศไทย (UTC+7) เสมอ เพื่อให้ตารางเรียนตรงวัน
+    # ดึงข้อมูลประวัติการกดของ User
+    user_info = user_spam_filter.get(uid, {"last_time": 0, "count": 0})
+    
+    # ตรวจสอบว่าเป็นการกดต่อเนื่องหรือไม่
+    if current_time - user_info["last_time"] < RESET_THRESHOLD:
+        user_info["count"] += 1
+    else:
+        user_info["count"] = 1 # หยุดเล่นนานพอแล้ว รีเซ็ตให้นับ 1 ใหม่
+    
+    # --- ตรรกะป้องกันการกดรั่ว ---
+    if user_info["count"] > BURST_LIMIT:
+        # ถ้ากดเกิน 5 ครั้ง และยังรอไม่ถึง 0.8 วิ ให้บล็อกคำสั่งนี้
+        if current_time - user_info["last_time"] < COOLDOWN_TIME:
+            # อัปเดตเวลาเพื่อให้ User ต้องเริ่มนับถอยหลังใหม่จากจุดนี้
+            user_info["last_time"] = current_time 
+            user_spam_filter[uid] = user_info
+            return 
+    
+    # อัปเดตข้อมูลการกดล่าสุด
+    user_info["last_time"] = current_time
+    user_spam_filter[uid] = user_info
+
+    # ---------------------------------
+    
+    text = event.message.text.strip()
+    
+    # [FIX] บังคับเวลาประเทศไทยเสมอ
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     today_en = now.strftime("%A")
     
@@ -58,7 +91,7 @@ def handle_message(event):
     try:
         # --- [3] MENU SYSTEM ---
         if text in ["เมนู", "หน้า 1", "ยกเลิก"]:
-            user_col.delete_one({"user_id": uid}) # ล้างสถานะที่ค้างอยู่
+            user_col.delete_one({"user_id": uid})
             menu1 = {
                 "type": "bubble",
                 "header": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "🌸 ม.2/9 Menu (1/2)", "weight": "bold", "size": "xl", "color": "#1DB446"}]},
@@ -94,16 +127,12 @@ def handle_message(event):
             how_to = (
                 "📖 สรุปวิธีใช้งานบอท ม.2/9\n"
                 "--------------------------\n"
-                "📝 แจ้งการบ้าน: กดแล้วพิมพ์ 'วิชา/งาน/กำหนดส่ง' และระบุชื่อครู\n"
-                "📋 เช็คงาน: ดูสรุปงานสัปดาห์นี้ (แยกรายวัน จ-ศ)\n"
+                "📝 แจ้งการบ้าน: กดแล้วพิมพ์ 'วิชา/งาน/กำหนดส่ง'\n"
+                "📋 เช็คงาน: ดูสรุปงานแยกรายวัน\n"
                 "📢 แจ้งสอบ: บันทึกวิชาและวันสอบ\n"
-                "📅 ตารางสอบ: เช็คตารางสอบที่เพื่อนแจ้งไว้\n"
-                "🎲 สุ่มเลขที่: สุ่มเพื่อน 1 คนจากเลขที่ 1-40\n"
-                "📚 เวนยกหนังสือ: สุ่มเพื่อน 2 คนมาช่วยงาน\n"
-                "👥 สุ่มจัดกลุ่ม: ระบุจำนวนกลุ่มที่ต้องการ แล้วบอทจะแบ่งให้\n"
-                "📅 ตารางเรียน: ดูวิชาเรียนตามวันจริงของวันนี้\n"
+                "🎲 สุ่มเลขที่: สุ่มเพื่อน 1 คน\n"
                 "--------------------------\n"
-                "⚠️ หากบอทค้างหรือพิมพ์ผิด ให้พิมพ์ 'ยกเลิก' เพื่อเริ่มใหม่"
+                "⚠️ หากบอทไม่ตอบ แสดงว่ากดรัวเกินไปจ้า (รอ 0.8 วิ)"
             )
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=how_to))
             return
@@ -115,14 +144,14 @@ def handle_message(event):
             return
 
         elif text == "ติดต่อแอดมิน":
-            res = "📱 ติดต่อแอดมิน (พชรภัทร)\n📞 เบอร์โทร: 0954672577\n🆔 LINE ID: porshe3012\n\nสามารถพิมพ์ข้อความทิ้งไว้ได้เลยครับ!"
+            res = "📱 ติดต่อแอดมิน (พชรภัทร)\n📞 เบอร์โทร: 0954672577\n🆔 LINE ID: porshe3012"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
             return
 
-        # --- [5] HOMEWORK SYSTEM (บันทึกและเช็คงานแยกวัน) ---
+        # --- [5] HOMEWORK SYSTEM ---
         elif text == "แจ้งการบ้าน":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "HW", "step": 1, "temp": ""}}, upsert=True)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📝 [1/2] พิมพ์ วิชา / งาน / วันส่ง\n(อย่าลืมพิมพ์ชื่อวัน เช่น วันจันทร์ เพื่อให้ระบบแยกตารางให้ครับ)"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📝 [1/2] พิมพ์ วิชา / งาน / วันส่ง"))
             return
 
         elif state == "HW":
@@ -130,10 +159,9 @@ def handle_message(event):
                 user_col.update_one({"user_id": uid}, {"$set": {"step": 2, "temp": text}})
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👨‍🏫 [2/2] ครูท่านไหนสั่งครับ?"))
             elif step == 2:
-                time_now = now.strftime("%Y-%m-%d %H:%M")
-                homework_col.insert_one({"info": temp, "teacher": text, "created_at": time_now})
+                homework_col.insert_one({"info": temp, "teacher": text, "created_at": now.strftime("%Y-%m-%d %H:%M")})
                 user_col.delete_one({"user_id": uid})
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกเรียบร้อย! เช็คได้ที่เมนู 'เช็คงาน'"))
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกเรียบร้อย!"))
             return
 
         elif text == "เช็คงาน":
@@ -141,82 +169,56 @@ def handle_message(event):
             days = ["วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์"]
             report = "📋 สรุปการบ้านสัปดาห์นี้\n"
             hw_by_day = {day: [] for day in days}
-            
             for hw in all_hw:
                 info = hw['info']
-                found_day = False
+                found = False
                 for day in days:
                     if day in info:
                         hw_by_day[day].append(f"📌 {info} (ครู{hw['teacher']})")
-                        found_day = True
-                        break
-                if not found_day:
-                    hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")
-                    
+                        found = True; break
+                if not found: hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")
             for day in days:
-                report += f"\n📍 {day}\n"
-                if hw_by_day[day]:
-                    report += "\n".join(hw_by_day[day]) + "\n"
-                else:
-                    report += "ยังไม่มีข้อมูล/ยังไม่ได้แจ้ง\n"
-            
+                report += f"\n📍 {day}\n" + ("\n".join(hw_by_day[day]) if hw_by_day[day] else "ยังไม่มีงาน") + "\n"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
             return
 
-        # --- [5.1] EXAM SYSTEM (ระบบแจ้งสอบและเช็คตารางสอบ) ---
+        # --- [5.1] EXAM SYSTEM ---
         elif text == "แจ้งสอบ":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "EXAM", "step": 1, "temp": ""}}, upsert=True)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📢 [1/2] พิมพ์ วิชา และ เรื่องที่สอบ\n(เช่น คณิต - เลขยกกำลัง)"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📢 [1/2] วิชาและเรื่องที่สอบ?"))
             return
 
         elif state == "EXAM":
             if step == 1:
                 user_col.update_one({"user_id": uid}, {"$set": {"step": 2, "temp": text}})
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📅 [2/2] สอบวันไหนและคาบไหนครับ?\n(เช่น วันศุกร์ที่ 20 คาบ 3-4)"))
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📅 [2/2] สอบวันไหน คาบไหน?"))
             elif step == 2:
-                exam_col.insert_one({
-                    "subject_info": temp,
-                    "date_time": text,
-                    "created_at": now.strftime("%Y-%m-%d %H:%M")
-                })
+                exam_col.insert_one({"subject_info": temp, "date_time": text, "created_at": now.strftime("%Y-%m-%d %H:%M")})
                 user_col.delete_one({"user_id": uid})
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกตารางสอบเรียบร้อยแล้ว! สู้ๆ นะทุกคน ✌️"))
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกตารางสอบแล้ว!"))
             return
 
         elif text == "เช็คตารางสอบ":
             all_exams = list(exam_col.find())
-            if not all_exams:
-                report = "✨ ตอนนี้ยังไม่มีแจ้งสอบจ้า"
-            else:
-                report = "📅 ตารางสอบที่แจ้งไว้\n"
-                for ex in all_exams:
-                    report += f"\n📌 {ex['subject_info']}\n⏰ {ex['date_time']}\n"
-            
+            report = "📅 ตารางสอบ\n" + "\n".join([f"📌 {ex['subject_info']}\n⏰ {ex['date_time']}" for ex in all_exams]) if all_exams else "✨ ยังไม่มีแจ้งสอบจ้า"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
             return
 
         # --- [6] RANDOM & OTHERS ---
         elif text == "สุ่มจัดกลุ่ม":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "GROUP", "step": 1}}, upsert=True)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👥 แบ่งกี่กลุ่มครับ? (พิมพ์เป็นตัวเลข)"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👥 แบ่งกี่กลุ่มครับ?"))
             return
 
         elif state == "GROUP":
             try:
-                num_groups = int(text)
-                if num_groups <= 0 or num_groups > 40:
-                    raise ValueError("เลขกลุ่มไม่ถูกต้อง")
-                
-                students = list(range(1, 41))
-                random.shuffle(students)
-                res = "🎲 ผลการสุ่มจัดกลุ่ม ม.2/9\n"
-                for i in range(num_groups):
-                    group_members = students[i::num_groups]
-                    res += f"\nกลุ่มที่ {i+1}: " + ", ".join(map(str, sorted(group_members)))
+                num = int(text)
+                students = list(range(1, 41)); random.shuffle(students)
+                res = "🎲 ผลสุ่มกลุ่ม\n"
+                for i in range(num):
+                    res += f"\nกลุ่ม {i+1}: " + ", ".join(map(str, sorted(students[i::num])))
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
-            except:
-                # [FIX] ดักจับ Error ถ้าเพื่อนพิมพ์ตัวหนังสือแทนตัวเลข บอทจะได้ไม่พัง
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์เป็นตัวเลข (1-40) เท่านั้นนะครับ"))
+            except: line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ พิมพ์เลข 1-40 นะครับ"))
             user_col.delete_one({"user_id": uid})
             return
 
@@ -226,14 +228,11 @@ def handle_message(event):
 
         elif text == "ตารางเรียน":
             sch = {"Monday": "ไทย, วิทย์, คณิต", "Tuesday": "สังคม, คณิต, ประวัติ", "Wednesday": "คณิต, ไทย, อังกฤษ", "Thursday": "วิทย์, สังคม, ไทย", "Friday": "พละ, คณิต, ไทย"}
-            res = f"📅 ตารางเรียนวันนี้ ({today_en}):\n{sch.get(today_en, 'วันหยุดครับ')}"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"📅 ตารางวันนี้ ({today_en}):\n{sch.get(today_en, 'วันหยุดครับ')}"))
             return
 
     except Exception as e:
-        # [FIX] ดักจับ Error ภาพรวม ป้องกันบอทหลับเวลาเกิดข้อผิดพลาดรุนแรง
-        print(f"Main System Error: {e}")
+        print(f"Main Error: {e}")
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
