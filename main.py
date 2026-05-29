@@ -4,6 +4,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import *
 from pymongo import MongoClient
+from google import genai  # Import ไลบรารี AI เวอร์ชันใหม่
 import datetime
 import random
 import time
@@ -14,9 +15,16 @@ app = Flask(__name__)
 TOKEN = os.environ.get("TOKEN")
 SECRET = os.environ.get("SECRET")
 MONGO_URI = os.environ.get("MONGO_URI")
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+
+# ⚠️ เปลี่ยนเป็น LINE User ID ของคุณเองนะครับ เพื่อสิทธิ์แอดมิน ⚠️
+ADMIN_UID = "U789xxxxYourActualIDxxxx" 
 
 line_bot_api = LineBotApi(TOKEN)
 handler = WebhookHandler(SECRET)
+
+# เปิดใช้งาน AI Client (ถ้ามี API Key)
+ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 # --- [2] DATABASE SYSTEM ---
 try:
@@ -28,12 +36,12 @@ try:
 except Exception as e:
     print(f"DB Error: {e}")
 
-# --- [0] ADVANCED ANTI-SPAM CONFIG ---
-# ระบบ Burst Cooldown: ยอมให้กดรัวได้ในช่วงแรก แต่ถ้าเกินขีดจำกัดต้องรอ
+# --- [0] ANTI-SPAM & RANDOM CACHE ---
 user_spam_filter = {} 
-BURST_LIMIT = 5        # กดรัวติดต่อกันได้ 5 ครั้งแรก
-COOLDOWN_TIME = 0.8    # หลังจากครั้งที่ 5 ต้องรอ 0.8 วินาทีต่อการส่ง 1 ครั้ง
-RESET_THRESHOLD = 2.0  # ถ้าหยุดพิมพ์เกิน 2 วินาที จะรีเซ็ตโควตาการกดรัวใหม่
+BURST_LIMIT = 5        
+COOLDOWN_TIME = 0.8    
+RESET_THRESHOLD = 2.0  
+last_random_number = None  # บันทึกเลขสุ่มล่าสุด ป้องกันเลขซ้ำติดกัน
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -47,36 +55,28 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
+    global last_random_number
     uid = event.source.user_id
     current_time = time.time()
     
-    # ดึงข้อมูลประวัติการกดของ User
+    # --- Anti-Spam (Burst Cooldown) ---
     user_info = user_spam_filter.get(uid, {"last_time": 0, "count": 0})
-    
-    # ตรวจสอบว่าเป็นการกดต่อเนื่องหรือไม่
     if current_time - user_info["last_time"] < RESET_THRESHOLD:
         user_info["count"] += 1
     else:
-        user_info["count"] = 1 # หยุดเล่นนานพอแล้ว รีเซ็ตให้นับ 1 ใหม่
-    
-    # --- ตรรกะป้องกันการกดรั่ว ---
+        user_info["count"] = 1
+        
     if user_info["count"] > BURST_LIMIT:
-        # ถ้ากดเกิน 5 ครั้ง และยังรอไม่ถึง 0.8 วิ ให้บล็อกคำสั่งนี้
         if current_time - user_info["last_time"] < COOLDOWN_TIME:
-            # อัปเดตเวลาเพื่อให้ User ต้องเริ่มนับถอยหลังใหม่จากจุดนี้
             user_info["last_time"] = current_time 
             user_spam_filter[uid] = user_info
             return 
-    
-    # อัปเดตข้อมูลการกดล่าสุด
+            
     user_info["last_time"] = current_time
     user_spam_filter[uid] = user_info
 
     # ---------------------------------
-    
     text = event.message.text.strip()
-    
-    # [FIX] บังคับเวลาประเทศไทยเสมอ
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     today_en = now.strftime("%A")
     
@@ -90,18 +90,24 @@ def handle_message(event):
 
     try:
         # --- [3] MENU SYSTEM ---
+        # ถ้าพิมพ์คำเหล่านี้ จะเคลียร์ทุกสถานะ (รวมถึงโหมด AI) แล้วกลับหน้าแรก
         if text in ["เมนู", "หน้า 1", "ยกเลิก"]:
             user_col.delete_one({"user_id": uid})
+            contents_list = [
+                {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📝 แจ้งการบ้าน", "text": "แจ้งการบ้าน"}},
+                {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📋 เช็คงานสัปดาห์นี้", "text": "เช็คงาน"}},
+                {"type": "button", "style": "primary", "color": "#E67E22", "action": {"type": "message", "label": "📢 แจ้งสอบ", "text": "แจ้งสอบ"}},
+                {"type": "button", "style": "primary", "color": "#9B59B6", "action": {"type": "message", "label": "🤖 คุยกับครูมานะ", "text": "คุยกับครูมานะ"}},
+                {"type": "button", "style": "secondary", "color": "#555555", "action": {"type": "message", "label": "💡 วิธีใช้", "text": "วิธีใช้"}}
+            ]
+            if uid == ADMIN_UID:
+                contents_list.append({"type": "button", "style": "secondary", "color": "#FF4B4B", "action": {"type": "message", "label": "🗑️ ล้างการบ้านทั้งหมด", "text": "ล้างการบ้านทั้งหมด"}})
+            contents_list.append({"type": "button", "style": "secondary", "action": {"type": "message", "label": "➡️ หน้า 2", "text": "หน้า 2"}})
+
             menu1 = {
                 "type": "bubble",
                 "header": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "🌸 ม.2/9 Menu (1/2)", "weight": "bold", "size": "xl", "color": "#1DB446"}]},
-                "body": {"type": "box", "layout": "vertical", "spacing": "md", "contents": [
-                    {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📝 แจ้งการบ้าน", "text": "แจ้งการบ้าน"}},
-                    {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📋 เช็คงานสัปดาห์นี้", "text": "เช็คงาน"}},
-                    {"type": "button", "style": "primary", "color": "#E67E22", "action": {"type": "message", "label": "📢 แจ้งสอบ", "text": "แจ้งสอบ"}},
-                    {"type": "button", "style": "secondary", "color": "#555555", "action": {"type": "message", "label": "💡 วิธีใช้", "text": "วิธีใช้"}},
-                    {"type": "button", "style": "secondary", "action": {"type": "message", "label": "➡️ หน้า 2", "text": "หน้า 2"}}
-                ]}
+                "body": {"type": "box", "layout": "vertical", "spacing": "md", "contents": contents_list}
             }
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Menu", contents=menu1))
             return
@@ -122,36 +128,42 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Menu 2", contents=menu2))
             return
 
-        # --- [4] ระบบวิธีใช้, เวนยกหนังสือ, ติดต่อแอดมิน ---
+        # --- ADMIN FUNCTION ---
+        elif text == "ล้างการบ้านทั้งหมด":
+            if uid == ADMIN_UID:
+                homework_col.delete_many({})
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🗑️ ล้างข้อมูลการบ้านเรียบร้อยแล้วจ้า!"))
+            else:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ ปุ่มนี้กดได้เฉพาะแอดมินพชรภัทรเท่านั้นครับ!"))
+            return
+
+        # --- วิธีใช้, เวนยกหนังสือ, ติดต่อแอดมิน ---
         elif text == "วิธีใช้":
             how_to = (
                 "📖 สรุปวิธีใช้งานบอท ม.2/9\n"
                 "--------------------------\n"
-                "📝 แจ้งการบ้าน: กดแล้วพิมพ์ 'วิชา/งาน/กำหนดส่ง'\n"
-                "📋 เช็คงาน: ดูสรุปงานแยกรายวัน\n"
-                "📢 แจ้งสอบ: บันทึกวิชาและวันสอบ\n"
-                "🎲 สุ่มเลขที่: สุ่มเพื่อน 1 คน\n"
+                "📝 แจ้งการบ้าน / 📋 เช็คงาน / 📢 แจ้งสอบ\n"
+                "🎲 สุ่มเลขที่ / 📚 เวนยกหนังสือ / 👥 สุ่มจัดกลุ่ม\n"
+                "🤖 โหมด AI ครูมานะ: กดปุ่ม 'คุยกับครูมานะ' เพื่อเปิดโหมดถามคำถามหรือปรึกษาเรื่องเรียนได้เลย!\n"
                 "--------------------------\n"
-                "⚠️ หากบอทไม่ตอบ แสดงว่ากดรัวเกินไปจ้า (รอ 0.8 วิ)"
+                "⚠️ หากต้องการออกจากโหมดใดๆ หรือบอทค้าง ให้พิมพ์ 'ยกเลิก'"
             )
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=how_to))
             return
 
         elif text == "เวนยกหนังสือ":
             lucky_ones = random.sample(range(1, 41), 2)
-            res = f"📚 เวนยกหนังสือวันนี้\nได้แก่เลขที่: {lucky_ones[0]} และ {lucky_ones[1]}\nสู้ๆ นะเพื่อน! 💪"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"📚 เวนยกหนังสือวันนี้\nได้แก่เลขที่: {lucky_ones[0]} และ {lucky_ones[1]}\nสู้ๆ นะเพื่อน! 💪"))
             return
 
         elif text == "ติดต่อแอดมิน":
-            res = "📱 ติดต่อแอดมิน (พชรภัทร)\n📞 เบอร์โทร: 0954672577\n🆔 LINE ID: porshe3012"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📱 ติดต่อแอดมิน (พชรภัทร)\n📞 เบอร์โทร: 0954672577\n🆔 LINE ID: porshe3012"))
             return
 
-        # --- [5] HOMEWORK SYSTEM ---
+        # --- HOMEWORK SYSTEM ---
         elif text == "แจ้งการบ้าน":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "HW", "step": 1, "temp": ""}}, upsert=True)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📝 [1/2] พิมพ์ วิชา / งาน / วันส่ง"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📝 [1/2] พิมพ์ วิชา / งาน / วันส่ง\n(เช่น คณิต/ทำแบบฝึกหัดหน้า 5/วันอังคาร)"))
             return
 
         elif state == "HW":
@@ -161,7 +173,7 @@ def handle_message(event):
             elif step == 2:
                 homework_col.insert_one({"info": temp, "teacher": text, "created_at": now.strftime("%Y-%m-%d %H:%M")})
                 user_col.delete_one({"user_id": uid})
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกเรียบร้อย!"))
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกการบ้านเรียบร้อยจ้า!"))
             return
 
         elif text == "เช็คงาน":
@@ -169,20 +181,22 @@ def handle_message(event):
             days = ["วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์"]
             report = "📋 สรุปการบ้านสัปดาห์นี้\n"
             hw_by_day = {day: [] for day in days}
+            
             for hw in all_hw:
-                info = hw['info']
+                info, teacher = hw.get('info', ''), hw.get('teacher', 'ไม่ระบุ')
                 found = False
                 for day in days:
                     if day in info:
-                        hw_by_day[day].append(f"📌 {info} (ครู{hw['teacher']})")
+                        hw_by_day[day].append(f"📌 {info} (ครู{teacher})")
                         found = True; break
                 if not found: hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")
+                    
             for day in days:
                 report += f"\n📍 {day}\n" + ("\n".join(hw_by_day[day]) if hw_by_day[day] else "ยังไม่มีงาน") + "\n"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
             return
 
-        # --- [5.1] EXAM SYSTEM ---
+        # --- EXAM SYSTEM ---
         elif text == "แจ้งสอบ":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "EXAM", "step": 1, "temp": ""}}, upsert=True)
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📢 [1/2] วิชาและเรื่องที่สอบ?"))
@@ -195,40 +209,89 @@ def handle_message(event):
             elif step == 2:
                 exam_col.insert_one({"subject_info": temp, "date_time": text, "created_at": now.strftime("%Y-%m-%d %H:%M")})
                 user_col.delete_one({"user_id": uid})
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกตารางสอบแล้ว!"))
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกตารางสอบสำเร็จ!"))
             return
 
         elif text == "เช็คตารางสอบ":
             all_exams = list(exam_col.find())
-            report = "📅 ตารางสอบ\n" + "\n".join([f"📌 {ex['subject_info']}\n⏰ {ex['date_time']}" for ex in all_exams]) if all_exams else "✨ ยังไม่มีแจ้งสอบจ้า"
+            report = "📅 ตารางสอบ\n" + "\n".join([f"📌 {ex['subject_info']}\n⏰ {ex['date_time']}" for ex in all_exams]) if all_exams else "✨ ตอนนี้ยังไม่มีแจ้งสอบจ้า"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
             return
 
-        # --- [6] RANDOM & OTHERS ---
+        # --- RANDOM & OTHERS ---
         elif text == "สุ่มจัดกลุ่ม":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "GROUP", "step": 1}}, upsert=True)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👥 แบ่งกี่กลุ่มครับ?"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👥 แบ่งกี่กลุ่มครับ? (พิมพ์เฉพาะตัวเลข)"))
             return
 
         elif state == "GROUP":
             try:
                 num = int(text)
                 students = list(range(1, 41)); random.shuffle(students)
-                res = "🎲 ผลสุ่มกลุ่ม\n"
+                res = "🎲 ผลสุ่มกลุ่ม ม.2/9\n"
                 for i in range(num):
                     res += f"\nกลุ่ม {i+1}: " + ", ".join(map(str, sorted(students[i::num])))
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
-            except: line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ พิมพ์เลข 1-40 นะครับ"))
+            except: line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ พิมพ์เป็นเลข 1-40 เท่านั้นนะครับ"))
             user_col.delete_one({"user_id": uid})
             return
 
         elif text == "สุ่มเลขที่":
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🎲 เลขที่ {random.randint(1, 40)}"))
+            while True:
+                new_num = random.randint(1, 40)
+                if new_num != last_random_number: break
+            last_random_number = new_num 
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🎲 เลขที่ {new_num}"))
             return
 
         elif text == "ตารางเรียน":
             sch = {"Monday": "ไทย, วิทย์, คณิต", "Tuesday": "สังคม, คณิต, ประวัติ", "Wednesday": "คณิต, ไทย, อังกฤษ", "Thursday": "วิทย์, สังคม, ไทย", "Friday": "พละ, คณิต, ไทย"}
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"📅 ตารางวันนี้ ({today_en}):\n{sch.get(today_en, 'วันหยุดครับ')}"))
+            return
+
+        # --- [โหมดกระตุ้นเปิดการใช้งาน AI] ---
+        elif text == "คุยกับครูมานะ":
+            user_col.update_one({"user_id": uid}, {"$set": {"state": "CHAT_AI", "step": 1}}, upsert=True)
+            welcome_msg = (
+                "👨‍🏫 สวัสดีครับนักเรียน ครูชื่อ 'ครูมานะ' เป็น AI ผู้ช่วยประจำห้อง ม.2/9 ครับ\n\n"
+                "มีเรื่องเรียนตรงไหนไม่เข้าใจ หรืออยากปรึกษาเรื่องอะไร พิมพ์คุยกับครูตรงนี้ได้เลยจ้า\n"
+                "(คำเตือน: ครูสอนให้ได้แต่ห้ามมาขอเฉลยการบ้านตรงๆ นะครับพ้ม! ❌ ส่วนถ้าใครอยากกลับไปหน้าเมนูหลัก ให้พิมพ์คำว่า 'ยกเลิก' นะครับ)"
+            )
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome_msg))
+            return
+
+        # ==================================================
+        # --- [🤖 CHATBOT AI SYSTEM - คุณครูมานะ ม.2/9] ---
+        # ==================================================
+        else:
+            # ตรวจสอบว่าเปิดโหมด AI อยู่ (state == "CHAT_AI") หรือกรณีที่พิมพ์คำอื่นๆ ทั่วไปนอกเหนือคำสั่ง
+            if state == "CHAT_AI" or (not state and ai_client):
+                if ai_client:
+                    # คำสั่งควบคุมพฤติกรรมคุณครูมานะตามที่พชรภัทรกำหนด
+                    mana_instruction = (
+                        "คุณคือ 'คุณครูมานะ' ครูผู้ชายที่เป็น AI ผู้ช่วยประจำห้องเรียน ม.2/9 Smart Classroom "
+                        "ลักษณะนิสัยของคุณคือ: มีความเข้มขรึม น่าเชื่อถือแบบครู แต่มีความเข้าใจในตัวนักเรียนทุกคนสูงมาก "
+                        "เป็นคนใจกว้าง หัวสมัยใหม่ ไม่มีการเหยียดเพศ เหยียดฐานะ หรือเหยียดใดๆ ทั้งสิ้น "
+                        "พร้อมที่จะช่วยเหลือและรับฟังนักเรียนในทุกๆ เรื่อง "
+                        "\n\n"
+                        "⚠️ กฎเหล็กในการปฏิบัติหน้าที่:\n"
+                        "1. ห้ามบอกคำตอบหรือเฉลยการบ้านแก่นักเรียนเด็ดขาด! ทำได้มากที่สุดคือการสอนการบ้าน อธิบายวิธีคิด "
+                        "บอกสูตร หรือแนะแนวทาง (Hint) เพื่อให้นักเรียนนำไปคิดและหาคำตอบด้วยตัวเองเท่านั้น\n"
+                        "2. ปฏิเสธการช่วยเหลือในเรื่องที่ผิดกฎหมาย หรือเรื่องที่พิจารณาแล้วว่าดูจะช่วยไม่ได้/เกินความสามารถของ AI อย่างสุภาพ\n"
+                        "3. แทนตัวเองว่า 'ครู' หรือ 'ครูมานะ' และเรียกคู่สนทนาว่า 'นักเรียน' หรือ 'พวกเรา' อย่างเป็นกันเองและสุภาพ"
+                    )
+                    
+                    prompt = f"{mana_instruction}\n\nข้อความจากนักเรียน ม.2/9: {text}"
+                    
+                    response = ai_client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=prompt,
+                    )
+                    ai_reply = response.text.strip()
+                    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
+                return
+            
+            # หากไม่ได้อยู่ในโหมด AI และคำสั่งไม่ถูกต้อง จะไม่ตอบกลับเพื่อป้องกันบอทตอบมั่วในกลุ่มไลน์
             return
 
     except Exception as e:
