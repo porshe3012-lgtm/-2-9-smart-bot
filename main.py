@@ -18,7 +18,7 @@ MONGO_URI = os.environ.get("MONGO_URI")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
 # ⚠️ เปลี่ยนเป็น LINE User ID ของคุณเองนะครับ เพื่อสิทธิ์แอดมิน ⚠️
-ADMIN_UID = "U789xxxxYourActualIDxxxx" 
+ADMIN_UID = "porshe3012" 
 
 line_bot_api = LineBotApi(TOKEN)
 handler = WebhookHandler(SECRET)
