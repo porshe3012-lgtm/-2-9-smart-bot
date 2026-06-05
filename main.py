@@ -18,7 +18,7 @@ MONGO_URI = os.environ.get("MONGO_URI")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 
 # ⚠️ เปลี่ยนเป็น LINE User ID ของคุณเองนะครับ เพื่อสิทธิ์แอดมิน ⚠️
-ADMIN_UID = "porshe3012" 
+ADMIN_UID = "U789xxxxYourActualIDxxxx" 
 
 line_bot_api = LineBotApi(TOKEN)
 handler = WebhookHandler(SECRET)
@@ -52,6 +52,12 @@ def callback():
     except InvalidSignatureError:
         abort(400)
     return "OK"
+
+# --- [เพิ่มระบบ Route สำหรับปลุกบอทกันหลับ] ---
+@app.route("/ping", methods=["GET"])
+def ping():
+    now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+    return f"ครูมานะตื่นอยู่ครับพชรภัทร! เวลาปัจจุบัน: {now.strftime('%H:%M:%S')}", 200
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -90,7 +96,6 @@ def handle_message(event):
 
     try:
         # --- [3] MENU SYSTEM ---
-        # ถ้าพิมพ์คำเหล่านี้ จะเคลียร์ทุกสถานะ (รวมถึงโหมด AI) แล้วกลับหน้าแรก
         if text in ["เมนู", "หน้า 1", "ยกเลิก"]:
             user_col.delete_one({"user_id": uid})
             contents_list = [
@@ -249,22 +254,21 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"📅 ตารางวันนี้ ({today_en}):\n{sch.get(today_en, 'วันหยุดครับ')}"))
             return
 
-        # --- [โหมดกระตุ้นเปิดการใช้งาน AI] ---
+        # --- โหมดเปิดการใช้งาน AI ครูมานะ ---
         elif text == "คุยกับครูมานะ":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "CHAT_AI", "step": 1}}, upsert=True)
             welcome_msg = (
-                "👨‍🏫 สวัสดีครับนักเรียน ครูชื่อ 'ครูมานะ' เป็น AI ผู้ช่วยประจำห้อง ม.2/9 ครับ\n\n"
+                "👨‍🏫 สวัสดีครับนักเรียน ครูชื่อ 'ครูมานะ วินัย' เป็น AI ผู้ช่วยและครูที่ปรึกษาประจำห้อง ม.2/9 ครับ\n\n"
                 "มีเรื่องเรียนตรงไหนไม่เข้าใจ หรืออยากปรึกษาเรื่องอะไร พิมพ์คุยกับครูตรงนี้ได้เลยจ้า\n"
                 "(คำเตือน: ครูสอนให้ได้แต่ห้ามมาขอเฉลยการบ้านตรงๆ นะครับพ้ม! ❌ ส่วนถ้าใครอยากกลับไปหน้าเมนูหลัก ให้พิมพ์คำว่า 'ยกเลิก' นะครับ)"
             )
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome_msg))
             return
 
-                # ==================================================
+        # ==================================================
         # --- [🤖 CHATBOT AI SYSTEM - คุณครูมานะ วินัย] ---
         # ==================================================
         else:
-            # ตรวจสอบว่าเปิดโหมด AI อยู่ (state == "CHAT_AI") หรือกรณีที่พิมพ์คำอื่นๆ ทั่วไปนอกเหนือคำสั่ง
             if state == "CHAT_AI" or (not state and ai_client):
                 if ai_client:
                     # คลังข้อมูลประวัติ นิสัย และกฎเหล็กของคุณครูมานะ วินัย
@@ -297,7 +301,6 @@ def handle_message(event):
                 return
             
             return
-
 
     except Exception as e:
         print(f"Main Error: {e}")
