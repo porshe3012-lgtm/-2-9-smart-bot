@@ -4,7 +4,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import *
 from pymongo import MongoClient
-from google import genai  # Import ไลบรารี AI เวอร์ชันใหม่
+from openai import OpenAI  # สลับมาใช้ไลบรารีของ OpenAI แทน
 import datetime
 import random
 import time
@@ -15,7 +15,7 @@ app = Flask(__name__)
 TOKEN = os.environ.get("TOKEN")
 SECRET = os.environ.get("SECRET")
 MONGO_URI = os.environ.get("MONGO_URI")
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+OPENAI_KEY = os.environ.get("OPENAI_API_KEY")  # เปลี่ยนชื่อตัวแปรรับคีย์
 
 # ⚠️ เปลี่ยนเป็น LINE User ID ของคุณเองนะครับ เพื่อสิทธิ์แอดมิน ⚠️
 ADMIN_UID = "U789xxxxYourActualIDxxxx" 
@@ -23,8 +23,8 @@ ADMIN_UID = "U789xxxxYourActualIDxxxx"
 line_bot_api = LineBotApi(TOKEN)
 handler = WebhookHandler(SECRET)
 
-# เปิดใช้งาน AI Client (ถ้ามี API Key)
-ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
+# เปิดใช้งาน OpenAI Client (ถ้ามี API Key)
+ai_client = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 
 # --- [2] DATABASE SYSTEM ---
 try:
@@ -41,7 +41,7 @@ user_spam_filter = {}
 BURST_LIMIT = 5        
 COOLDOWN_TIME = 0.8    
 RESET_THRESHOLD = 2.0  
-last_random_number = None  # บันทึกเลขสุ่มล่าสุด ป้องกันเลขซ้ำติดกัน
+last_random_number = None  
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -56,7 +56,6 @@ def callback():
 # --- [ระบบ Route สำหรับปลุกบอทกันหลับ] ---
 @app.route("/ping", methods=["GET"])
 def ping():
-    # ดึงเวลาปัจจุบัน UTC + 7 ชั่วโมง (เวลาไทย)
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     return f"ครูมานะตื่นอยู่ครับพชรภัทร! เวลาปัจจุบัน: {now.strftime('%H:%M:%S')}", 200
 
@@ -66,7 +65,6 @@ def handle_message(event):
     uid = event.source.user_id
     current_time = time.time()
     
-    # --- Anti-Spam (Burst Cooldown) ---
     user_info = user_spam_filter.get(uid, {"last_time": 0, "count": 0})
     if current_time - user_info["last_time"] < RESET_THRESHOLD:
         user_info["count"] += 1
@@ -82,7 +80,6 @@ def handle_message(event):
     user_info["last_time"] = current_time
     user_spam_filter[uid] = user_info
 
-    # ---------------------------------
     text = event.message.text.strip()
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     today_en = now.strftime("%A")
@@ -134,7 +131,6 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Menu 2", contents=menu2))
             return
 
-        # --- ADMIN FUNCTION ---
         elif text == "ล้างการบ้านทั้งหมด":
             if uid == ADMIN_UID:
                 homework_col.delete_many({})
@@ -143,16 +139,15 @@ def handle_message(event):
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ ปุ่มนี้กดได้เฉพาะแอดมินพชรภัทรเท่านั้นครับ!"))
             return
 
-        # --- วิธีใช้, เวนยกหนังสือ, ติดต่อแอดมิน ---
         elif text == "วิธีใช้":
             how_to = (
                 "📖 สรุปวิธีใช้งานบอท ม.2/9\n"
                 "--------------------------\n"
                 "📝 แจ้งการบ้าน / 📋 เช็คงาน / 📢 แจ้งสอบ\n"
                 "🎲 สุ่มเลขที่ / 📚 เวนยกหนังสือ / 👥 สุ่มจัดกลุ่ม\n"
-                "🤖 โหมด AI ครูมานะ: กดปุ่ม 'คุยกับครูมานะ' เพื่อเปิดโหมดถามคำถามหรือปรึกษาเรื่องเรียนได้เลย!\n"
+                "🤖 โหมด AI ครูมานะ: กดปุ่ม 'คุยกับครูมานะ' เพื่อเปิดโหมดถามคำถามได้เลย!\n"
                 "--------------------------\n"
-                "⚠️ หากต้องการออกจากโหมดใดๆ หรือบอทค้าง ให้พิมพ์ 'ยกเลิก'"
+                "⚠️ หากต้องการออกจากโหมดใดๆ ให้พิมพ์ 'ยกเลิก'"
             )
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=how_to))
             return
@@ -166,7 +161,6 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📱 ติดต่อแอดมิน (พชรภัทร)\n📞 เบอร์โทร: 0954672577\n🆔 LINE ID: porshe3012"))
             return
 
-        # --- HOMEWORK SYSTEM ---
         elif text == "แจ้งการบ้าน":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "HW", "step": 1, "temp": ""}}, upsert=True)
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📝 [1/2] พิมพ์ วิชา / งาน / วันส่ง\n(เช่น คณิต/ทำแบบฝึกหัดหน้า 5/วันอังคาร)"))
@@ -202,7 +196,6 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
             return
 
-        # --- EXAM SYSTEM ---
         elif text == "แจ้งสอบ":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "EXAM", "step": 1, "temp": ""}}, upsert=True)
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📢 [1/2] วิชาและเรื่องที่สอบ?"))
@@ -224,7 +217,6 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
             return
 
-        # --- RANDOM & OTHERS ---
         elif text == "สุ่มจัดกลุ่ม":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "GROUP", "step": 1}}, upsert=True)
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👥 แบ่งกี่กลุ่มครับ? (พิมพ์เฉพาะตัวเลข)"))
@@ -255,7 +247,6 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"📅 ตารางวันนี้ ({today_en}):\n{sch.get(today_en, 'วันหยุดครับ')}"))
             return
 
-        # --- โหมดเปิดการใช้งาน AI ครูมานะ ---
         elif text == "คุยกับครูมานะ":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "CHAT_AI", "step": 1}}, upsert=True)
             welcome_msg = (
@@ -267,12 +258,11 @@ def handle_message(event):
             return
 
         # ==================================================
-        # --- [🤖 CHATBOT AI SYSTEM - คุณครูมานะ วินัย] ---
+        # --- [🤖 CHATBOT AI SYSTEM - สลับเป็น ChatGPT แทน] ---
         # ==================================================
         else:
             if state == "CHAT_AI" or (not state and ai_client):
                 if ai_client:
-                    # คลังข้อมูลประวัติ นิสัย และกฎเหล็กของคุณครูมานะ วินัย
                     mana_profile = (
                         "คุณคือ 'คุณครูมานะ' ชื่อจริงคือ 'นาย มานะ วินัย' เป็น AI ผู้ช่วยและครูที่ปรึกษาประจำห้องเรียน ม.2/9 Smart Classroom\n"
                         "[ประวัติและลักษณะภายนอก]:\n"
@@ -291,16 +281,17 @@ def handle_message(event):
                         "5. หากมีนักเรียนมาปรึกษาเกี่ยวกับปัญหาเรื่องเพื่อน, สุขภาพจิต, ร่างกาย หรือสภาพจิตใจ ต้องให้คำปรึกษาด้วยความอ่อนโยน ปลอบใจ และเป็นพื้นที่ปลอดภัยให้แก่พวกเขาทันที"
                     )
                     
-                    prompt = f"{mana_profile}\n\nข้อความจากนักเรียน ม.2/9: {text}"
-                    
-                    response = ai_client.models.generate_content(
-                        model='gemini-2.5-flash',
-                        contents=prompt,
+                    # เรียกใช้โครงสร้างของ OpenAI ChatGPT
+                    response = ai_client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": mana_profile},
+                            {"role": "user", "content": text}
+                        ]
                     )
-                    ai_reply = response.text.strip()
+                    ai_reply = response.choices[0].message.content.strip()
                     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
                 return
-            
             return
 
     except Exception as e:
