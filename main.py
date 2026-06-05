@@ -53,9 +53,10 @@ def callback():
         abort(400)
     return "OK"
 
-# --- [เพิ่มระบบ Route สำหรับปลุกบอทกันหลับ] ---
+# --- [ระบบ Route สำหรับปลุกบอทกันหลับ] ---
 @app.route("/ping", methods=["GET"])
 def ping():
+    # ดึงเวลาปัจจุบัน UTC + 7 ชั่วโมง (เวลาไทย)
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     return f"ครูมานะตื่นอยู่ครับพชรภัทร! เวลาปัจจุบัน: {now.strftime('%H:%M:%S')}", 200
 
