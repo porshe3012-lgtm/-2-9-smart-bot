@@ -3,76 +3,278 @@ import io
 import datetime
 import random
 import time
-from flask import Flask, request, abort
-from linebot import LineBotApi, WebhookHandler
+import requests
+import threading
+from flask import Flask, request, abort, render_template_string, jsonify, session, redirect, url_for
+
+# MongoDB & Gradio Client
+from pymongo import MongoClient
+from gradio_client import Client, handle_file
+
+# LINE Bot SDK v1 (สำหรับการรองรับ Flex Message และ Image Message ในระบบห้องเรียน)
+from linebot import LineBotApi, WebhookHandler as WebhookHandlerV1
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, TextMessage, ImageMessage, TextSendMessage, FlexSendMessage
 )
-from pymongo import MongoClient
-from gradio_client import Client, handle_file
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "kru-mana-super-secret-key-2026")
 
-# --- [1] CONFIG ---
-TOKEN = os.environ.get("TOKEN")
-SECRET = os.environ.get("SECRET")
-MONGO_URI = os.environ.get("MONGO_URI")
-
-# ⚠️ ใส่ชื่อ Space บน Hugging Face ของคุณ (เช่น "phacharaphat/m29-smart-ai") ⚠️
+# ==================================================
+# --- [1] CONFIGURATION & ENVIRONMENT VARIABLES ---
+# ==================================================
+TOKEN = os.environ.get("TOKEN", "")
+SECRET = os.environ.get("SECRET", "")
+MONGO_URI = os.environ.get("MONGO_URI", "")
 HF_SPACE_NAME = os.environ.get("HF_SPACE_NAME", "your-username/your-space-name")
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
+RENDER_APP_URL = os.environ.get("RENDER_APP_URL", "")
+
+LINE_LOGIN_CLIENT_ID = os.environ.get("LINE_LOGIN_CLIENT_ID", "")
+LINE_LOGIN_CLIENT_SECRET = os.environ.get("LINE_LOGIN_CLIENT_SECRET", "")
 
 ADMIN_UID = "U789xxxxYourActualIDxxxx" 
 
+# Initialize LINE Bot API v1
 line_bot_api = LineBotApi(TOKEN) if TOKEN else None
-handler = WebhookHandler(SECRET) if SECRET else None
+handler = WebhookHandlerV1(SECRET) if SECRET else None
 
-# --- [2] DATABASE SYSTEM ---
+# ==================================================
+# --- [2] DATABASE SYSTEM (MongoDB) ---
+# ==================================================
 try:
     client = MongoClient(MONGO_URI)
     db = client['m29_smart_classroom']
     homework_col = db['homework']
     user_col = db['user_state']
     exam_col = db['exams']
+    print("MongoDB Connected Successfully!")
 except Exception as e:
-    print(f"DB Error: {e}")
+    print(f"DB Connection Error: {e}")
 
+# ==================================================
 # --- [3] ANTI-SPAM & CACHE ---
+# ==================================================
 user_spam_filter = {} 
 BURST_LIMIT = 5        
 COOLDOWN_TIME = 0.8    
 RESET_THRESHOLD = 2.0  
 last_random_number = None  
 
-# --- [4] GRADIO AI CALLER FUNCTION ---
-def ask_huggingface_ai(user_text="", image_bytes=None):
+# ==================================================
+# --- [4] GRADIO AI CALLER FUNCTION (Hugging Face) ---
+# ==================================================
+def ask_huggingface_ai(user_text="", image_bytes=None, image_path=None):
     try:
-        # เชื่อมต่อกับ Hugging Face Space (ZeroGPU)
-        ai_client = Client(HF_SPACE_NAME)
+        ai_client = Client(HF_SPACE_NAME, hf_token=HF_TOKEN if HF_TOKEN else None)
         
-        image_path = None
-        if image_bytes:
-            # สร้างไฟล์รูปภาพชั่วคราวเพื่อส่งให้ Gradio Client
+        temp_created = False
+        if image_bytes and not image_path:
             image_path = "temp_input.jpg"
             with open(image_path, "wb") as f:
                 f.write(image_bytes)
+            temp_created = True
                 
-        # ยิงคำถาม/รูปภาพไปที่ API ของ Gradio Space
+        img_param = handle_file(image_path) if image_path else None
+
         result = ai_client.predict(
             message=user_text,
-            image=handle_file(image_path) if image_path else None,
+            image=img_param,
             api_name="/predict"
         )
         
-        # ลบไฟล์ชั่วคราวหลังใช้งาน
-        if image_path and os.path.exists(image_path):
+        if temp_created and os.path.exists(image_path):
             os.remove(image_path)
             
         return result
     except Exception as e:
-        print(f"AI Connection Error: {e}")
-        return f"ครูกำลังประมวลผลอยู่หรือเซิร์ฟเวอร์ AI กำลังรีสตาร์ทครับ ลองใหม่อีกครั้งนะครับ (Error: {e})"
+        err_msg = str(e)
+        print(f"AI Connection Error: {err_msg}")
+        if "exceeded your ZeroGPU" in err_msg:
+            return "ขณะนี้โควต้าประมวลผล AI ชั่วคราวเต็มแล้วครับ นักเรียนโปรดลองใหม่อีกครั้งในอีกสักครู่นะครับ"
+        return f"ครูกำลังประมวลผลอยู่หรือเซิร์ฟเวอร์ AI กำลังรีสตาร์ทครับ ลองใหม่อีกครั้งนะครับ (Error: {err_msg})"
 
+# ==================================================
+# --- [5] AUTO-PING SELF KEEPALIVE (กัน Render หลับ) ---
+# ==================================================
+def start_self_ping():
+    def ping_loop():
+        time.sleep(15)
+        while True:
+            if RENDER_APP_URL:
+                try:
+                    target_url = RENDER_APP_URL.rstrip('/') + '/ping'
+                    resp = requests.get(target_url, timeout=10)
+                    print(f"⏰ [Auto-Ping Status]: {resp.status_code}")
+                except Exception as ex:
+                    print(f"⚠️ [Auto-Ping Failed]: {ex}")
+            time.sleep(600)
+
+    thread = threading.Thread(target=ping_loop, daemon=True)
+    thread.start()
+
+start_self_ping()
+
+@app.route("/ping", methods=["GET"])
+def ping():
+    now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+    return f"ครูมานะตื่นอยู่ครับพชรภัทร! เวลาปัจจุบัน: {now.strftime('%H:%M:%S')}", 200
+
+# ==================================================
+# --- [6] WEB UI & API ROUTING (HTML / Tailwind CSS) ---
+# ==================================================
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ห้องเรียน ม.2/9 - ปรึกษาครูมานะวินัย</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8fafc; font-family: 'Kanit', sans-serif; }
+        .chat-container { height: calc(100vh - 140px); }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <!-- Header Navigation Bar -->
+    <header class="bg-blue-900 text-white p-3.5 shadow-md flex justify-between items-center px-4">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-full bg-amber-400 flex items-center justify-center font-bold text-blue-950 text-xl border-2 border-white">
+                👨‍🏫
+            </div>
+            <div>
+                <h1 class="font-bold text-base sm:text-lg leading-tight">ครูมานะวินัย (ม.2/9)</h1>
+                <p class="text-xs text-blue-200">ระบบ AI ปรึกษาการเรียนและชีวิตประจำวัน</p>
+            </div>
+        </div>
+        <div>
+            {% if user %}
+                <div class="flex items-center space-x-2">
+                    <img src="{{ user.picture }}" class="w-8 h-8 rounded-full border-2 border-green-400">
+                    <span class="text-xs font-medium hidden sm:inline">{{ user.name }}</span>
+                    <a href="/logout" class="text-xs bg-red-600 hover:bg-red-700 px-2.5 py-1 rounded text-white font-medium">ออก</a>
+                </div>
+            {% else %}
+                <a href="/login/line" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 font-medium shadow transition">
+                    <i class="fa-brands fa-line text-base"></i> ล็อกอินด้วย LINE
+                </a>
+            {% endif %}
+        </div>
+    </header>
+
+    <!-- Chat Messages Window -->
+    <main class="flex-1 overflow-y-auto p-4 space-y-4 chat-container max-w-4xl w-full mx-auto" id="chatContainer">
+        <div class="flex items-start gap-2.5">
+            <div class="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>
+            <div class="flex flex-col max-w-[85%] sm:max-w-[75%] p-3.5 bg-white border border-gray-200 rounded-e-2xl rounded-es-2xl shadow-sm text-gray-800 text-sm">
+                สวัสดีครับนักเรียน ครูชื่อ 'ครูมานะวินัย' ครับ! มีคำถามการเรียน โจทย์การบ้าน หรือเรื่องสงสัยอะไร ส่งข้อความมาให้ครูช่วยดูได้เลยนะครับ!
+            </div>
+        </div>
+    </main>
+
+    <!-- Chat Input Area -->
+    <footer class="p-3 bg-white border-t border-gray-200">
+        <form id="chatForm" class="flex items-center gap-2 max-w-4xl mx-auto">
+            <input type="text" id="messageInput" class="flex-1 bg-gray-100 border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 p-2.5 outline-none" placeholder="พิมพ์ข้อความคุยกับครูมานะ..." required>
+            <button type="submit" id="sendBtn" class="bg-blue-800 hover:bg-blue-900 text-white p-2.5 rounded-xl px-4 transition">
+                <i class="fa-solid fa-paper-plane"></i>
+            </button>
+        </form>
+    </footer>
+
+    <script>
+        const chatContainer = document.getElementById('chatContainer');
+        const chatForm = document.getElementById('chatForm');
+        const messageInput = document.getElementById('messageInput');
+
+        function appendMessage(sender, text, isUser = false) {
+            const div = document.createElement('div');
+            div.className = isUser ? "flex items-start justify-end gap-2.5" : "flex items-start gap-2.5";
+            
+            const msgBg = isUser ? "bg-blue-600 text-white rounded-s-2xl rounded-ee-2xl" : "bg-white text-gray-800 border border-gray-200 rounded-e-2xl rounded-es-2xl shadow-sm";
+            const avatar = isUser ? "" : `<div class="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>`;
+
+            div.innerHTML = `
+                ${avatar}
+                <div class="flex flex-col max-w-[85%] sm:max-w-[75%] p-3.5 ${msgBg} text-sm">
+                    <p class="whitespace-pre-line">${text}</p>
+                </div>
+            `;
+            chatContainer.appendChild(div);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const text = messageInput.value.trim();
+            if (!text) return;
+
+            appendMessage("นักเรียน", text, true);
+            messageInput.value = "";
+            
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = "loadingBubble";
+            loadingDiv.className = "flex items-start gap-2.5";
+            loadingDiv.innerHTML = `<div class="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div><div class="p-3 bg-white border border-gray-200 rounded-2xl text-xs text-gray-500">ครูกำลังพิมพ์คำตอบ...</div>`;
+            chatContainer.appendChild(loadingDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            try {
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text })
+                });
+                const data = await res.json();
+                document.getElementById('loadingBubble').remove();
+                appendMessage("ครูมานะ", data.response, false);
+            } catch (err) {
+                if(document.getElementById('loadingBubble')) document.getElementById('loadingBubble').remove();
+                appendMessage("ระบบ", "เกิดข้อผิดพลาดในการเชื่อมต่อครับ", false);
+            }
+        });
+    </script>
+</body>
+</html>
+"""
+
+@app.route("/", methods=["GET"])
+def home():
+    user = session.get("user")
+    return render_template_string(HTML_TEMPLATE, user=user)
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    data = request.json or {}
+    msg = data.get("message", "")
+    ai_reply = ask_huggingface_ai(user_text=msg)
+    return jsonify({"response": ai_reply})
+
+# --- LINE LOGIN ---
+@app.route("/login/line")
+def line_login():
+    if not LINE_LOGIN_CLIENT_ID:
+        return "กรุณาตั้งค่า LINE_LOGIN_CLIENT_ID ก่อนครับ", 400
+    redirect_uri = f"{RENDER_APP_URL.rstrip('/')}/login/line/callback"
+    line_auth_url = (
+        f"https://access.line.me/oauth2/v2.1/authorize?response_type=code"
+        f"&client_id={LINE_LOGIN_CLIENT_ID}&redirect_uri={redirect_uri}"
+        f"&state=12345&scope=profile%20openid"
+    )
+    return redirect(line_auth_url)
+
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect(url_for("home"))
+
+# ==================================================
+# --- [7] LINE WEBHOOK CALLBACK ---
+# ==================================================
 @app.route("/callback", methods=["POST"])
 def callback():
     if not handler: return "Handler Config Missing", 500
@@ -84,13 +286,8 @@ def callback():
         abort(400)
     return "OK"
 
-@app.route("/ping", methods=["GET"])
-def ping():
-    now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
-    return f"ครูมานะตื่นอยู่ครับพชรภัทร! เวลาปัจจุบัน: {now.strftime('%H:%M:%S')}", 200
-
 # ==================================================
-# --- [5] LINE HANDLER: TEXT MESSAGES ---
+# --- [8] LINE HANDLER: TEXT MESSAGES ---
 # ==================================================
 @handler.add(MessageEvent, message=TextMessage) if handler else lambda x: x
 def handle_text_message(event):
@@ -223,7 +420,7 @@ def handle_text_message(event):
                     if day in info:
                         hw_by_day[day].append(f"📌 {info} (ครู{teacher})")
                         found = True; break
-                if not found: hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw['teacher']})")
+                if not found: hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw.get('teacher', 'ไม่ระบุ')})")
                     
             for day in days:
                 report += f"\n📍 {day}\n" + ("\n".join(hw_by_day[day]) if hw_by_day[day] else "ยังไม่มีงาน") + "\n"
@@ -291,7 +488,7 @@ def handle_text_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome_msg))
             return
 
-        # --- [🤖 CHATBOT AI SYSTEM - ยิงไปหา Hugging Face Space] ---
+        # --- CHATBOT AI SYSTEM ---
         else:
             if state == "CHAT_AI" or not state:
                 ai_reply = ask_huggingface_ai(user_text=text)
@@ -299,10 +496,10 @@ def handle_text_message(event):
                 return
 
     except Exception as e:
-        print(f"Main Error: {e}")
+        print(f"Main Handler Error: {e}")
 
 # ==================================================
-# --- [6] LINE HANDLER: IMAGE MESSAGES (รับรูปภาพ) ---
+# --- [9] LINE HANDLER: IMAGE MESSAGES (รับรูปภาพ) ---
 # ==================================================
 @handler.add(MessageEvent, message=ImageMessage) if handler else lambda x: x
 def handle_image_message(event):
@@ -316,7 +513,7 @@ def handle_image_message(event):
             image_bytes.write(chunk)
         image_bytes = image_bytes.getvalue()
 
-        # ส่งรูปไปให้ Hugging Face Qwen2-VL-7B วิเคราะห์
+        # ส่งรูปไปให้ AI วิเคราะห์
         ai_reply = ask_huggingface_ai(user_text="ช่วยอธิบายโจทย์หรือรายละเอียดในรูปนี้ให้ฟังหน่อยครับ", image_bytes=image_bytes)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
         
@@ -324,5 +521,9 @@ def handle_image_message(event):
         print(f"Image Handler Error: {e}")
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="ขออภัยครับ ครูไม่สามารถดาวน์โหลดรูปภาพได้ในขณะนี้"))
 
+# ==================================================
+# --- [10] START SERVER ---
+# ==================================================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
