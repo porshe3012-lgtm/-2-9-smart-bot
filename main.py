@@ -11,7 +11,7 @@ from flask import Flask, request, abort, render_template_string, jsonify, sessio
 from pymongo import MongoClient
 from gradio_client import Client, handle_file
 
-# LINE Bot SDK v1 (สำหรับการรองรับ Flex Message และ Image Message ในระบบห้องเรียน)
+# LINE Bot SDK v1
 from linebot import LineBotApi, WebhookHandler as WebhookHandlerV1
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -43,13 +43,18 @@ handler = WebhookHandlerV1(SECRET) if SECRET else None
 # ==================================================
 # --- [2] DATABASE SYSTEM (MongoDB) ---
 # ==================================================
+homework_col = None
+exam_col = None
+user_col = None
+
 try:
-    client = MongoClient(MONGO_URI)
-    db = client['m29_smart_classroom']
-    homework_col = db['homework']
-    user_col = db['user_state']
-    exam_col = db['exams']
-    print("MongoDB Connected Successfully!")
+    if MONGO_URI:
+        client = MongoClient(MONGO_URI)
+        db = client['m29_smart_classroom']
+        homework_col = db['homework']
+        user_col = db['user_state']
+        exam_col = db['exams']
+        print("MongoDB Connected Successfully!")
 except Exception as e:
     print(f"DB Connection Error: {e}")
 
@@ -63,7 +68,7 @@ RESET_THRESHOLD = 2.0
 last_random_number = None  
 
 # ==================================================
-# --- [4] GRADIO AI CALLER FUNCTION (Hugging Face) ---
+# --- [4] GRADIO AI CALLER FUNCTION ---
 # ==================================================
 def ask_huggingface_ai(user_text="", image_bytes=None, image_path=None):
     try:
@@ -96,7 +101,7 @@ def ask_huggingface_ai(user_text="", image_bytes=None, image_path=None):
         return f"ครูกำลังประมวลผลอยู่หรือเซิร์ฟเวอร์ AI กำลังรีสตาร์ทครับ ลองใหม่อีกครั้งนะครับ (Error: {err_msg})"
 
 # ==================================================
-# --- [5] AUTO-PING SELF KEEPALIVE (กัน Render หลับ) ---
+# --- [5] AUTO-PING SELF KEEPALIVE ---
 # ==================================================
 def start_self_ping():
     def ping_loop():
@@ -119,124 +124,361 @@ start_self_ping()
 @app.route("/ping", methods=["GET"])
 def ping():
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
-    return f"ครูมานะตื่นอยู่ครับพชรภัทร! เวลาปัจจุบัน: {now.strftime('%H:%M:%S')}", 200
+    return f"ครูมานะตื่นอยู่ครับ! เวลาปัจจุบัน: {now.strftime('%H:%M:%S')}", 200
 
 # ==================================================
-# --- [6] WEB UI & API ROUTING (HTML / Tailwind CSS) ---
+# --- [6] WEB DASHBOARD UI (Tailwind CSS) ---
 # ==================================================
-HTML_TEMPLATE = """
+DASHBOARD_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="th">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ห้องเรียน ม.2/9 - ปรึกษาครูมานะวินัย</title>
+    <title>Smart Classroom ม.2/9 Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
-        body { background-color: #f8fafc; font-family: 'Kanit', sans-serif; }
-        .chat-container { height: calc(100vh - 140px); }
+        body { font-family: 'Kanit', sans-serif; background-color: #f1f5f9; }
+        .active-tab { border-b-4 border-blue-600 text-blue-600 font-bold; }
     </style>
 </head>
-<body class="flex flex-col h-screen">
+<body class="pb-12">
 
-    <!-- Header Navigation Bar -->
-    <header class="bg-blue-900 text-white p-3.5 shadow-md flex justify-between items-center px-4">
-        <div class="flex items-center space-x-3">
-            <div class="w-10 h-10 rounded-full bg-amber-400 flex items-center justify-center font-bold text-blue-950 text-xl border-2 border-white">
-                👨‍🏫
+    <!-- Header / Navbar -->
+    <header class="bg-indigo-900 text-white shadow-lg sticky top-0 z-50">
+        <div class="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-amber-400 flex items-center justify-center font-bold text-indigo-950 text-xl border-2 border-white shadow">
+                    🏫
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight">ห้องเรียน ม.2/9</h1>
+                    <p class="text-xs text-indigo-200">ระบบการเรียนและปรึกษา AI ครูมานะวินัย</p>
+                </div>
             </div>
             <div>
-                <h1 class="font-bold text-base sm:text-lg leading-tight">ครูมานะวินัย (ม.2/9)</h1>
-                <p class="text-xs text-blue-200">ระบบ AI ปรึกษาการเรียนและชีวิตประจำวัน</p>
+                {% if user %}
+                    <div class="flex items-center space-x-2">
+                        <img src="{{ user.picture }}" class="w-8 h-8 rounded-full border-2 border-green-400">
+                        <span class="text-xs font-medium hidden sm:inline">{{ user.name }}</span>
+                        <a href="/logout" class="text-xs bg-red-500 hover:bg-red-600 px-2.5 py-1.5 rounded-lg text-white transition">ออก</a>
+                    </div>
+                {% else %}
+                    <a href="/login/line" class="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 font-medium shadow transition">
+                        <i class="fa-brands fa-line text-base"></i> ล็อกอิน LINE
+                    </a>
+                {% endif %}
             </div>
         </div>
-        <div>
-            {% if user %}
-                <div class="flex items-center space-x-2">
-                    <img src="{{ user.picture }}" class="w-8 h-8 rounded-full border-2 border-green-400">
-                    <span class="text-xs font-medium hidden sm:inline">{{ user.name }}</span>
-                    <a href="/logout" class="text-xs bg-red-600 hover:bg-red-700 px-2.5 py-1 rounded text-white font-medium">ออก</a>
-                </div>
-            {% else %}
-                <a href="/login/line" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 font-medium shadow transition">
-                    <i class="fa-brands fa-line text-base"></i> ล็อกอินด้วย LINE
-                </a>
-            {% endif %}
+
+        <!-- Navigation Tabs -->
+        <div class="bg-white border-b border-gray-200 text-gray-600 text-sm font-medium flex justify-around max-w-6xl mx-auto px-2">
+            <button onclick="switchTab('dashboard')" id="tab-dashboard" class="py-3 px-4 flex items-center gap-2 active-tab">
+                <i class="fa-solid fa-square-poll-vertical"></i>แดชบอร์ดงาน
+            </button>
+            <button onclick="switchTab('tools')" id="tab-tools" class="py-3 px-4 flex items-center gap-2">
+                <i class="fa-solid fa-dice"></i>เครื่องมือห้องเรียน
+            </button>
+            <button onclick="switchTab('ai')" id="tab-ai" class="py-3 px-4 flex items-center gap-2">
+                <i class="fa-solid fa-robot"></i>คุยกับครูมานะ AI
+            </button>
         </div>
     </header>
 
-    <!-- Chat Messages Window -->
-    <main class="flex-1 overflow-y-auto p-4 space-y-4 chat-container max-w-4xl w-full mx-auto" id="chatContainer">
-        <div class="flex items-start gap-2.5">
-            <div class="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>
-            <div class="flex flex-col max-w-[85%] sm:max-w-[75%] p-3.5 bg-white border border-gray-200 rounded-e-2xl rounded-es-2xl shadow-sm text-gray-800 text-sm">
-                สวัสดีครับนักเรียน ครูชื่อ 'ครูมานะวินัย' ครับ! มีคำถามการเรียน โจทย์การบ้าน หรือเรื่องสงสัยอะไร ส่งข้อความมาให้ครูช่วยดูได้เลยนะครับ!
+    <!-- Main Container -->
+    <main class="max-w-6xl mx-auto px-4 mt-6">
+
+        <!-- TAB 1: DASHBOARD -->
+        <div id="section-dashboard" class="space-y-6">
+            
+            <!-- Add Homework / Exam Quick Actions -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Card: แจ้งการบ้าน -->
+                <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                    <h3 class="font-bold text-gray-800 text-base mb-3 flex items-center gap-2">
+                        <i class="fa-solid fa-pen-to-square text-indigo-600"></i> เพิ่มการบ้านใหม่
+                    </h3>
+                    <form id="addHwForm" class="space-y-3">
+                        <input type="text" id="hwInfo" placeholder="วิชา / รายละเอียดงาน / วันส่ง (เช่น คณิต หน้า 10 ส่ง วันอังคาร)" class="w-full bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500" required>
+                        <div class="flex gap-2">
+                            <input type="text" id="hwTeacher" placeholder="ชื่อครูผู้สอน" class="w-1/2 bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500" required>
+                            <button type="submit" class="w-1/2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-xl p-2.5 transition">
+                                <i class="fa-solid fa-plus mr-1"></i> บันทึกงาน
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Card: แจ้งสอบ -->
+                <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                    <h3 class="font-bold text-gray-800 text-base mb-3 flex items-center gap-2">
+                        <i class="fa-solid fa-bullhorn text-amber-500"></i> เพิ่มแจ้งสอบ
+                    </h3>
+                    <form id="addExamForm" class="space-y-3">
+                        <input type="text" id="examSubject" placeholder="วิชา / เรื่องที่สอบ" class="w-full bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500" required>
+                        <div class="flex gap-2">
+                            <input type="text" id="examDate" placeholder="วัน/เวลา สอบ (เช่น วันพุธ คาบ 3)" class="w-1/2 bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500" required>
+                            <button type="submit" class="w-1/2 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-xl p-2.5 transition">
+                                <i class="fa-solid fa-plus mr-1"></i> บันทึกตารางสอบ
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Homework List Section -->
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="font-bold text-gray-800 text-lg flex items-center gap-2">
+                        <i class="fa-solid fa-list-check text-indigo-600"></i> รายการการบ้านทั้งหมด
+                    </h2>
+                    <button onclick="loadDashboardData()" class="text-xs text-indigo-600 hover:underline"><i class="fa-solid fa-rotate-right"></i> รีเฟรช</button>
+                </div>
+                
+                <div id="homeworkList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <p class="text-gray-400 text-sm col-span-full text-center py-6">กำลังโหลดข้อมูลการบ้าน...</p>
+                </div>
+            </div>
+
+            <!-- Exam List Section -->
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <h2 class="font-bold text-gray-800 text-lg mb-4 flex items-center gap-2">
+                    <i class="fa-solid fa-calendar-check text-rose-500"></i> ตารางสอบควิซ / ปลายภาค
+                </h2>
+                <div id="examList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <p class="text-gray-400 text-sm col-span-full text-center py-6">กำลังโหลดตารางสอบ...</p>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- TAB 2: CLASSROOM TOOLS -->
+        <div id="section-tools" class="hidden space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Tool 1: สุ่มเลขที่ -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
+                    <div class="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl">🎲</div>
+                    <h3 class="font-bold text-gray-800 text-base mb-2">สุ่มเลขที่</h3>
+                    <p class="text-xs text-gray-500 mb-4">สุ่มผู้โชคดีตอบคำถาม (1-40)</p>
+                    <div id="randomResult" class="text-4xl font-extrabold text-indigo-600 mb-4 my-2">-</div>
+                    <button onclick="runRandomStudent()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm py-2.5 rounded-xl transition">สุ่มเลย!</button>
+                </div>
+
+                <!-- Tool 2: เวรยกหนังสือ -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
+                    <div class="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl">📚</div>
+                    <h3 class="font-bold text-gray-800 text-base mb-2">เวรยกหนังสือประจำวัน</h3>
+                    <p class="text-xs text-gray-500 mb-4">สุ่มเพื่อน 2 คนไปยกหนังสือ</p>
+                    <div id="bookDutyResult" class="text-lg font-bold text-amber-600 mb-4 my-2 h-10 flex items-center justify-center">-</div>
+                    <button onclick="runBookDuty()" class="w-full bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm py-2.5 rounded-xl transition">สุ่มเวรยกหนังสือ</button>
+                </div>
+
+                <!-- Tool 3: สุ่มจัดกลุ่ม -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
+                    <div class="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl">👥</div>
+                    <h3 class="font-bold text-gray-800 text-base mb-2">สุ่มแบ่งกลุ่ม</h3>
+                    <div class="flex items-center justify-center gap-2 mb-4">
+                        <span class="text-xs text-gray-500">จำนวนกลุ่ม:</span>
+                        <input type="number" id="groupCount" value="4" min="2" max="10" class="w-16 bg-gray-50 border border-gray-200 text-center text-sm rounded-lg p-1 outline-none">
+                    </div>
+                    <button onclick="runRandomGroup()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm py-2.5 rounded-xl transition">สุ่มแบ่งกลุ่ม</button>
+                </div>
+            </div>
+
+            <!-- Group Result Box -->
+            <div id="groupResultBox" class="hidden bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                <h4 class="font-bold text-gray-800 text-md mb-3"><i class="fa-solid fa-users text-emerald-600"></i> ผลการแบ่งกลุ่ม</h4>
+                <div id="groupResultContainer" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-sm"></div>
             </div>
         </div>
+
+        <!-- TAB 3: AI CHATBOT -->
+        <div id="section-ai" class="hidden">
+            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[75vh]">
+                <!-- Chat Window -->
+                <div class="p-4 bg-indigo-50 border-b border-indigo-100 flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-full bg-indigo-900 text-white flex items-center justify-center font-bold text-sm">ครู</div>
+                    <div>
+                        <h4 class="font-bold text-gray-800 text-sm">ปรึกษาครูมานะวินัย (AI)</h4>
+                        <p class="text-xs text-gray-500">สอบถามวิชาการ โจทย์การบ้าน ได้ตลอด 24 ชม.</p>
+                    </div>
+                </div>
+                
+                <div class="flex-1 overflow-y-auto p-4 space-y-4" id="chatContainer">
+                    <div class="flex items-start gap-2.5">
+                        <div class="w-8 h-8 rounded-full bg-indigo-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>
+                        <div class="max-w-[80%] p-3.5 bg-white border border-gray-200 rounded-e-2xl rounded-es-2xl shadow-sm text-gray-800 text-sm">
+                            สวัสดีครับนักเรียน! มีโจทย์การบ้านข้อไหนสงสัย หรืออยากให้ครูช่วยอธิบายเรื่องอะไร พิมพ์ถามเข้ามาได้เลยนะครับ
+                        </div>
+                    </div>
+                </div>
+
+                <div class="p-3 bg-white border-t border-gray-200">
+                    <form id="chatForm" class="flex items-center gap-2">
+                        <input type="text" id="messageInput" class="flex-1 bg-gray-100 border border-gray-300 text-gray-900 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500" placeholder="พิมพ์คำถามที่ต้องการถามครู..." required>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white p-2.5 rounded-xl px-4 transition">
+                            <i class="fa-solid fa-paper-plane"></i>
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
     </main>
 
-    <!-- Chat Input Area -->
-    <footer class="p-3 bg-white border-t border-gray-200">
-        <form id="chatForm" class="flex items-center gap-2 max-w-4xl mx-auto">
-            <input type="text" id="messageInput" class="flex-1 bg-gray-100 border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 p-2.5 outline-none" placeholder="พิมพ์ข้อความคุยกับครูมานะ..." required>
-            <button type="submit" id="sendBtn" class="bg-blue-800 hover:bg-blue-900 text-white p-2.5 rounded-xl px-4 transition">
-                <i class="fa-solid fa-paper-plane"></i>
-            </button>
-        </form>
-    </footer>
-
     <script>
-        const chatContainer = document.getElementById('chatContainer');
-        const chatForm = document.getElementById('chatForm');
-        const messageInput = document.getElementById('messageInput');
-
-        function appendMessage(sender, text, isUser = false) {
-            const div = document.createElement('div');
-            div.className = isUser ? "flex items-start justify-end gap-2.5" : "flex items-start gap-2.5";
-            
-            const msgBg = isUser ? "bg-blue-600 text-white rounded-s-2xl rounded-ee-2xl" : "bg-white text-gray-800 border border-gray-200 rounded-e-2xl rounded-es-2xl shadow-sm";
-            const avatar = isUser ? "" : `<div class="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>`;
-
-            div.innerHTML = `
-                ${avatar}
-                <div class="flex flex-col max-w-[85%] sm:max-w-[75%] p-3.5 ${msgBg} text-sm">
-                    <p class="whitespace-pre-line">${text}</p>
-                </div>
-            `;
-            chatContainer.appendChild(div);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+        // Tab Switcher
+        function switchTab(tab) {
+            ['dashboard', 'tools', 'ai'].forEach(t => {
+                document.getElementById(`section-${t}`).classList.add('hidden');
+                document.getElementById(`tab-${t}`).classList.remove('active-tab');
+            });
+            document.getElementById(`section-${tab}`).classList.remove('hidden');
+            document.getElementById(`tab-${tab}`).classList.add('active-tab');
         }
 
-        chatForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const text = messageInput.value.trim();
-            if (!text) return;
+        // Fetch Dashboard Data
+        async function loadDashboardData() {
+            try {
+                const res = await fetch('/api/dashboard_data');
+                const data = await res.json();
+                
+                // Render Homework
+                const hwBox = document.getElementById('homeworkList');
+                if(data.homework.length === 0) {
+                    hwBox.innerHTML = '<p class="text-gray-400 text-sm col-span-full text-center py-6">🎉 ไม่มีงานค้างในระบบเลยครับ!</p>';
+                } else {
+                    hwBox.innerHTML = data.homework.map(hw => `
+                        <div class="p-4 rounded-xl border border-indigo-100 bg-indigo-50/40 relative">
+                            <span class="text-xs font-semibold px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 mb-2 inline-block">ครู${hw.teacher}</span>
+                            <p class="font-medium text-gray-800 text-sm mb-1">${hw.info}</p>
+                            <p class="text-xs text-gray-400">บันทึกเมื่อ: ${hw.created_at}</p>
+                        </div>
+                    `).join('');
+                }
 
-            appendMessage("นักเรียน", text, true);
-            messageInput.value = "";
+                // Render Exams
+                const examBox = document.getElementById('examList');
+                if(data.exams.length === 0) {
+                    examBox.innerHTML = '<p class="text-gray-400 text-sm col-span-full text-center py-6">✨ ยังไม่มีประกาศสอบครับ</p>';
+                } else {
+                    examBox.innerHTML = data.exams.map(ex => `
+                        <div class="p-4 rounded-xl border border-amber-100 bg-amber-50/40">
+                            <p class="font-bold text-amber-800 text-sm mb-1">📌 ${ex.subject_info}</p>
+                            <p class="text-xs text-amber-600">⏰ วัน/เวลา: ${ex.date_time}</p>
+                        </div>
+                    `).join('');
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        // Add Homework
+        document.getElementById('addHwForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const info = document.getElementById('hwInfo').value;
+            const teacher = document.getElementById('hwTeacher').value;
+            await fetch('/api/add_homework', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ info, teacher })
+            });
+            document.getElementById('hwInfo').value = '';
+            document.getElementById('hwTeacher').value = '';
+            loadDashboardData();
+        });
+
+        // Add Exam
+        document.getElementById('addExamForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const subject_info = document.getElementById('examSubject').value;
+            const date_time = document.getElementById('examDate').value;
+            await fetch('/api/add_exam', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ subject_info, date_time })
+            });
+            document.getElementById('examSubject').value = '';
+            document.getElementById('examDate').value = '';
+            loadDashboardData();
+        });
+
+        // Random Tools
+        function runRandomStudent() {
+            const num = Math.floor(Math.random() * 40) + 1;
+            document.getElementById('randomResult').innerText = `เลขที่ ${num}`;
+        }
+
+        function runBookDuty() {
+            let n1 = Math.floor(Math.random() * 40) + 1;
+            let n2 = Math.floor(Math.random() * 40) + 1;
+            while(n1 === n2) n2 = Math.floor(Math.random() * 40) + 1;
+            document.getElementById('bookDutyResult').innerText = `เลขที่ ${n1} และ เลขที่ ${n2}`;
+        }
+
+        function runRandomGroup() {
+            const count = parseInt(document.getElementById('groupCount').value) || 4;
+            let students = Array.from({length: 40}, (_, i) => i + 1).sort(() => Math.random() - 0.5);
+            let groups = Array.from({length: count}, () => []);
+            students.forEach((s, idx) => groups[idx % count].push(s));
             
-            const loadingDiv = document.createElement('div');
-            loadingDiv.id = "loadingBubble";
-            loadingDiv.className = "flex items-start gap-2.5";
-            loadingDiv.innerHTML = `<div class="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div><div class="p-3 bg-white border border-gray-200 rounded-2xl text-xs text-gray-500">ครูกำลังพิมพ์คำตอบ...</div>`;
-            chatContainer.appendChild(loadingDiv);
+            const container = document.getElementById('groupResultContainer');
+            container.innerHTML = groups.map((g, idx) => `
+                <div class="p-3 bg-gray-50 rounded-xl border border-gray-200">
+                    <span class="font-bold text-indigo-600">กลุ่ม ${idx+1}:</span> ${g.sort((a,b)=>a-b).join(', ')}
+                </div>
+            `).join('');
+            document.getElementById('groupResultBox').classList.remove('hidden');
+        }
+
+        // AI Chat System
+        document.getElementById('chatForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const input = document.getElementById('messageInput');
+            const text = input.value.trim();
+            if(!text) return;
+
+            const chatContainer = document.getElementById('chatContainer');
+            chatContainer.innerHTML += `
+                <div class="flex items-start justify-end gap-2.5">
+                    <div class="max-w-[80%] p-3.5 bg-indigo-600 text-white rounded-s-2xl rounded-ee-2xl text-sm">${text}</div>
+                </div>
+            `;
+            input.value = '';
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            const loadingId = 'loading-' + Date.now();
+            chatContainer.innerHTML += `
+                <div id="${loadingId}" class="flex items-start gap-2.5">
+                    <div class="w-8 h-8 rounded-full bg-indigo-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>
+                    <div class="p-3 bg-white border border-gray-200 rounded-2xl text-xs text-gray-400">ครูกำลังพิมพ์คำตอบ...</div>
+                </div>
+            `;
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
             try {
                 const res = await fetch('/api/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ message: text })
                 });
                 const data = await res.json();
-                document.getElementById('loadingBubble').remove();
-                appendMessage("ครูมานะ", data.response, false);
-            } catch (err) {
-                if(document.getElementById('loadingBubble')) document.getElementById('loadingBubble').remove();
-                appendMessage("ระบบ", "เกิดข้อผิดพลาดในการเชื่อมต่อครับ", false);
+                document.getElementById(loadingId).remove();
+                chatContainer.innerHTML += `
+                    <div class="flex items-start gap-2.5">
+                        <div class="w-8 h-8 rounded-full bg-indigo-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>
+                        <div class="max-w-[80%] p-3.5 bg-white border border-gray-200 rounded-e-2xl rounded-es-2xl shadow-sm text-gray-800 text-sm">${data.response}</div>
+                    </div>
+                `;
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            } catch(e) {
+                if(document.getElementById(loadingId)) document.getElementById(loadingId).remove();
             }
         });
+
+        // Initial Load
+        loadDashboardData();
     </script>
 </body>
 </html>
@@ -245,7 +487,44 @@ HTML_TEMPLATE = """
 @app.route("/", methods=["GET"])
 def home():
     user = session.get("user")
-    return render_template_string(HTML_TEMPLATE, user=user)
+    return render_template_string(DASHBOARD_TEMPLATE, user=user)
+
+# ==================================================
+# --- [7] API ENDPOINTS FOR WEB DASHBOARD ---
+# ==================================================
+@app.route("/api/dashboard_data", methods=["GET"])
+def api_dashboard_data():
+    hw_list = []
+    exam_list = []
+    if homework_col is not None:
+        hw_list = list(homework_col.find({}, {"_id": 0}))
+    if exam_col is not None:
+        exam_list = list(exam_col.find({}, {"_id": 0}))
+    return jsonify({"homework": hw_list, "exams": exam_list})
+
+@app.route("/api/add_homework", methods=["POST"])
+def api_add_homework():
+    if homework_col is not None:
+        data = request.json or {}
+        now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+        homework_col.insert_one({
+            "info": data.get("info", ""),
+            "teacher": data.get("teacher", ""),
+            "created_at": now.strftime("%Y-%m-%d %H:%M")
+        })
+    return jsonify({"status": "ok"})
+
+@app.route("/api/add_exam", methods=["POST"])
+def api_add_exam():
+    if exam_col is not None:
+        data = request.json or {}
+        now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+        exam_col.insert_one({
+            "subject_info": data.get("subject_info", ""),
+            "date_time": data.get("date_time", ""),
+            "created_at": now.strftime("%Y-%m-%d %H:%M")
+        })
+    return jsonify({"status": "ok"})
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -273,7 +552,7 @@ def logout():
     return redirect(url_for("home"))
 
 # ==================================================
-# --- [7] LINE WEBHOOK CALLBACK ---
+# --- [8] LINE WEBHOOK CALLBACK & HANDLERS ---
 # ==================================================
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -286,16 +565,12 @@ def callback():
         abort(400)
     return "OK"
 
-# ==================================================
-# --- [8] LINE HANDLER: TEXT MESSAGES ---
-# ==================================================
 @handler.add(MessageEvent, message=TextMessage) if handler else lambda x: x
 def handle_text_message(event):
     global last_random_number
     uid = event.source.user_id
     current_time = time.time()
     
-    # Anti-Spam Check
     user_info = user_spam_filter.get(uid, {"last_time": 0, "count": 0})
     if current_time - user_info["last_time"] < RESET_THRESHOLD:
         user_info["count"] += 1
@@ -313,216 +588,46 @@ def handle_text_message(event):
 
     text = event.message.text.strip()
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
-    today_en = now.strftime("%A")
     
     try:
-        user_data = user_col.find_one({"user_id": uid})
-        state = user_data.get('state') if user_data else None
-        step = user_data.get('step', 0) if user_data else 0
-        temp = user_data.get('temp', "") if user_data else ""
-    except:
-        state, step, temp = None, 0, ""
-
-    try:
-        # --- MENU SYSTEM ---
         if text in ["เมนู", "หน้า 1", "ยกเลิก"]:
-            user_col.delete_one({"user_id": uid})
+            if user_col: user_col.delete_one({"user_id": uid})
             contents_list = [
                 {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📝 แจ้งการบ้าน", "text": "แจ้งการบ้าน"}},
                 {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📋 เช็คงานสัปดาห์นี้", "text": "เช็คงาน"}},
                 {"type": "button", "style": "primary", "color": "#E67E22", "action": {"type": "message", "label": "📢 แจ้งสอบ", "text": "แจ้งสอบ"}},
-                {"type": "button", "style": "primary", "color": "#9B59B6", "action": {"type": "message", "label": "🤖 คุยกับครูมานะ", "text": "คุยกับครูมานะ"}},
-                {"type": "button", "style": "secondary", "color": "#555555", "action": {"type": "message", "label": "💡 วิธีใช้", "text": "วิธีใช้"}}
+                {"type": "button", "style": "primary", "color": "#9B59B6", "action": {"type": "message", "label": "🤖 คุยกับครูมานะ", "text": "คุยกับครูมานะ"}}
             ]
-            if uid == ADMIN_UID:
-                contents_list.append({"type": "button", "style": "secondary", "color": "#FF4B4B", "action": {"type": "message", "label": "🗑️ ล้างการบ้านทั้งหมด", "text": "ล้างการบ้านทั้งหมด"}})
-            contents_list.append({"type": "button", "style": "secondary", "action": {"type": "message", "label": "➡️ หน้า 2", "text": "หน้า 2"}})
-
             menu1 = {
                 "type": "bubble",
-                "header": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "🌸 ม.2/9 Menu (1/2)", "weight": "bold", "size": "xl", "color": "#1DB446"}]},
+                "header": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "🌸 ม.2/9 Menu", "weight": "bold", "size": "xl", "color": "#1DB446"}]},
                 "body": {"type": "box", "layout": "vertical", "spacing": "md", "contents": contents_list}
             }
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Menu", contents=menu1))
             return
-
-        elif text == "หน้า 2":
-            menu2 = {
-                "type": "bubble",
-                "header": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "🎯 ระบบสุ่ม & ตาราง (2/2)", "weight": "bold", "size": "xl", "color": "#E67E22"}]},
-                "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": [
-                    {"type": "button", "style": "primary", "color": "#F39C12", "action": {"type": "message", "label": "📖 ตารางเรียนวันนี้", "text": "ตารางเรียน"}},
-                    {"type": "button", "style": "primary", "color": "#F39C12", "action": {"type": "message", "label": "📅 ตารางสอบ", "text": "เช็คตารางสอบ"}},
-                    {"type": "button", "style": "primary", "color": "#F39C12", "action": {"type": "message", "label": "🎲 สุ่มเลขที่", "text": "สุ่มเลขที่"}},
-                    {"type": "button", "style": "primary", "color": "#E67E22", "action": {"type": "message", "label": "📚 เวนยกหนังสือ", "text": "เวนยกหนังสือ"}},
-                    {"type": "button", "style": "primary", "color": "#F39C12", "action": {"type": "message", "label": "👥 สุ่มจัดกลุ่ม", "text": "สุ่มจัดกลุ่ม"}},
-                    {"type": "button", "style": "secondary", "action": {"type": "message", "label": "⬅️ หน้า 1", "text": "หน้า 1"}}
-                ]}
-            }
-            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Menu 2", contents=menu2))
-            return
-
-        elif text == "ล้างการบ้านทั้งหมด":
-            if uid == ADMIN_UID:
-                homework_col.delete_many({})
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🗑️ ล้างข้อมูลการบ้านเรียบร้อยแล้วจ้า!"))
-            else:
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ ปุ่มนี้กดได้เฉพาะแอดมินพชรภัทรเท่านั้นครับ!"))
-            return
-
-        elif text == "วิธีใช้":
-            how_to = (
-                "📖 สรุปวิธีใช้งานบอท ม.2/9\n"
-                "--------------------------\n"
-                "📝 แจ้งการบ้าน / 📋 เช็คงาน / 📢 แจ้งสอบ\n"
-                "🎲 สุ่มเลขที่ / 📚 เวนยกหนังสือ / 👥 สุ่มจัดกลุ่ม\n"
-                "🤖 โหมด AI ครูมานะ: พิมพ์คุย หรือ 'ส่งรูปโจทย์การบ้าน' มาให้ครูช่วยอธิบายได้เลยครับ!\n"
-                "--------------------------\n"
-                "⚠️ หากต้องการออกจากโหมดใดๆ ให้พิมพ์ 'ยกเลิก'"
-            )
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=how_to))
-            return
-
-        elif text == "เวนยกหนังสือ":
-            lucky_ones = random.sample(range(1, 41), 2)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"📚 เวนยกหนังสือวันนี้\nได้แก่เลขที่: {lucky_ones[0]} และ {lucky_ones[1]}\nสู้ๆ นะเพื่อน! 💪"))
-            return
-
-        elif text == "ติดต่อแอดมิน":
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📱 ติดต่อแอดมิน (พชรภัทร)\n📞 เบอร์โทร: 0954672577\n🆔 LINE ID: porshe3012"))
-            return
-
-        elif text == "แจ้งการบ้าน":
-            user_col.update_one({"user_id": uid}, {"$set": {"state": "HW", "step": 1, "temp": ""}}, upsert=True)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📝 [1/2] พิมพ์ วิชา / งาน / วันส่ง\n(เช่น คณิต/ทำแบบฝึกหัดหน้า 5/วันอังคาร)"))
-            return
-
-        elif state == "HW":
-            if step == 1:
-                user_col.update_one({"user_id": uid}, {"$set": {"step": 2, "temp": text}})
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👨‍🏫 [2/2] ครูท่านไหนสั่งครับ?"))
-            elif step == 2:
-                homework_col.insert_one({"info": temp, "teacher": text, "created_at": now.strftime("%Y-%m-%d %H:%M")})
-                user_col.delete_one({"user_id": uid})
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกการบ้านเรียบร้อยจ้า!"))
-            return
-
-        elif text == "เช็คงาน":
-            all_hw = list(homework_col.find())
-            days = ["วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์"]
-            report = "📋 สรุปการบ้านสัปดาห์นี้\n"
-            hw_by_day = {day: [] for day in days}
-            
-            for hw in all_hw:
-                info, teacher = hw.get('info', ''), hw.get('teacher', 'ไม่ระบุ')
-                found = False
-                for day in days:
-                    if day in info:
-                        hw_by_day[day].append(f"📌 {info} (ครู{teacher})")
-                        found = True; break
-                if not found: hw_by_day["วันจันทร์"].append(f"📌 {info} (ครู{hw.get('teacher', 'ไม่ระบุ')})")
-                    
-            for day in days:
-                report += f"\n📍 {day}\n" + ("\n".join(hw_by_day[day]) if hw_by_day[day] else "ยังไม่มีงาน") + "\n"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
-            return
-
-        elif text == "แจ้งสอบ":
-            user_col.update_one({"user_id": uid}, {"$set": {"state": "EXAM", "step": 1, "temp": ""}}, upsert=True)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📢 [1/2] วิชาและเรื่องที่สอบ?"))
-            return
-
-        elif state == "EXAM":
-            if step == 1:
-                user_col.update_one({"user_id": uid}, {"$set": {"step": 2, "temp": text}})
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="📅 [2/2] สอบวันไหน คาบไหน?"))
-            elif step == 2:
-                exam_col.insert_one({"subject_info": temp, "date_time": text, "created_at": now.strftime("%Y-%m-%d %H:%M")})
-                user_col.delete_one({"user_id": uid})
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✅ บันทึกตารางสอบสำเร็จ!"))
-            return
-
-        elif text == "เช็คตารางสอบ":
-            all_exams = list(exam_col.find())
-            report = "📅 ตารางสอบ\n" + "\n".join([f"📌 {ex['subject_info']}\n⏰ {ex['date_time']}" for ex in all_exams]) if all_exams else "✨ ตอนนี้ยังไม่มีแจ้งสอบจ้า"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=report))
-            return
-
-        elif text == "สุ่มจัดกลุ่ม":
-            user_col.update_one({"user_id": uid}, {"$set": {"state": "GROUP", "step": 1}}, upsert=True)
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👥 แบ่งกี่กลุ่มครับ? (พิมพ์เฉพาะตัวเลข)"))
-            return
-
-        elif state == "GROUP":
-            try:
-                num = int(text)
-                students = list(range(1, 41)); random.shuffle(students)
-                res = "🎲 ผลสุ่มกลุ่ม ม.2/9\n"
-                for i in range(num):
-                    res += f"\nกลุ่ม {i+1}: " + ", ".join(map(str, sorted(students[i::num])))
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
-            except: line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ พิมพ์เป็นเลข 1-40 เท่านั้นนะครับ"))
-            user_col.delete_one({"user_id": uid})
-            return
-
-        elif text == "สุ่มเลขที่":
-            while True:
-                new_num = random.randint(1, 40)
-                if new_num != last_random_number: break
-            last_random_number = new_num 
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🎲 เลขที่ {new_num}"))
-            return
-
-        elif text == "ตารางเรียน":
-            sch = {"Monday": "ไทย, วิทย์, คณิต", "Tuesday": "สังคม, คณิต, ประวัติ", "Wednesday": "คณิต, ไทย, อังกฤษ", "Thursday": "วิทย์, สังคม, ไทย", "Friday": "พละ, คณิต, ไทย"}
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"📅 ตารางวันนี้ ({today_en}):\n{sch.get(today_en, 'วันหยุดครับ')}"))
-            return
-
-        elif text == "คุยกับครูมานะ":
-            user_col.update_one({"user_id": uid}, {"$set": {"state": "CHAT_AI", "step": 1}}, upsert=True)
-            welcome_msg = (
-                "👨‍🏫 สวัสดีครับนักเรียน ครูชื่อ 'ครูมานะ วินัย' ครับ\n\n"
-                "ถามคำถามวิชาการ หรือ 'ถ่ายรูปโจทย์การบ้าน' ส่งมาให้ครูช่วยดูได้เลยนะครับ!\n"
-                "(พิมพ์ 'ยกเลิก' เมื่อต้องการกลับไปหน้าเมนูหลัก)"
-            )
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome_msg))
-            return
-
-        # --- CHATBOT AI SYSTEM ---
         else:
-            if state == "CHAT_AI" or not state:
-                ai_reply = ask_huggingface_ai(user_text=text)
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
-                return
-
+            ai_reply = ask_huggingface_ai(user_text=text)
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
     except Exception as e:
-        print(f"Main Handler Error: {e}")
+        print(f"LINE Handler Error: {e}")
 
-# ==================================================
-# --- [9] LINE HANDLER: IMAGE MESSAGES (รับรูปภาพ) ---
-# ==================================================
 @handler.add(MessageEvent, message=ImageMessage) if handler else lambda x: x
 def handle_image_message(event):
     try:
         message_id = event.message.id
-        
-        # ดึงไฟล์รูปภาพจาก LINE Server
         message_content = line_bot_api.get_message_content(message_id)
         image_bytes = io.BytesIO()
         for chunk in message_content.iter_content():
             image_bytes.write(chunk)
         image_bytes = image_bytes.getvalue()
 
-        # ส่งรูปไปให้ AI วิเคราะห์
-        ai_reply = ask_huggingface_ai(user_text="ช่วยอธิบายโจทย์หรือรายละเอียดในรูปนี้ให้ฟังหน่อยครับ", image_bytes=image_bytes)
+        ai_reply = ask_huggingface_ai(user_text="ช่วยอธิบายโจทย์ในรูปนี้ให้หน่อยครับ", image_bytes=image_bytes)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
-        
     except Exception as e:
         print(f"Image Handler Error: {e}")
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="ขออภัยครับ ครูไม่สามารถดาวน์โหลดรูปภาพได้ในขณะนี้"))
 
 # ==================================================
-# --- [10] START SERVER ---
+# --- [9] START SERVER ---
 # ==================================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
