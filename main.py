@@ -1,13 +1,16 @@
 import os
-from flask import Flask, request, abort
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import *
-from pymongo import MongoClient
-from openai import OpenAI  # สลับมาใช้ไลบรารีของ OpenAI แทน
+import io
 import datetime
 import random
 import time
+from flask import Flask, request, abort
+from linebot import LineBotApi, WebhookHandler
+from linebot.exceptions import InvalidSignatureError
+from linebot.models import (
+    MessageEvent, TextMessage, ImageMessage, TextSendMessage, FlexSendMessage
+)
+from pymongo import MongoClient
+from gradio_client import Client, handle_file
 
 app = Flask(__name__)
 
@@ -15,16 +18,14 @@ app = Flask(__name__)
 TOKEN = os.environ.get("TOKEN")
 SECRET = os.environ.get("SECRET")
 MONGO_URI = os.environ.get("MONGO_URI")
-OPENAI_KEY = os.environ.get("OPENAI_API_KEY")  # เปลี่ยนชื่อตัวแปรรับคีย์
 
-# ⚠️ เปลี่ยนเป็น LINE User ID ของคุณเองนะครับ เพื่อสิทธิ์แอดมิน ⚠️
+# ⚠️ ใส่ชื่อ Space บน Hugging Face ของคุณ (เช่น "phacharaphat/m29-smart-ai") ⚠️
+HF_SPACE_NAME = os.environ.get("HF_SPACE_NAME", "your-username/your-space-name")
+
 ADMIN_UID = "U789xxxxYourActualIDxxxx" 
 
-line_bot_api = LineBotApi(TOKEN)
-handler = WebhookHandler(SECRET)
-
-# เปิดใช้งาน OpenAI Client (ถ้ามี API Key)
-ai_client = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
+line_bot_api = LineBotApi(TOKEN) if TOKEN else None
+handler = WebhookHandler(SECRET) if SECRET else None
 
 # --- [2] DATABASE SYSTEM ---
 try:
@@ -36,16 +37,46 @@ try:
 except Exception as e:
     print(f"DB Error: {e}")
 
-# --- [0] ANTI-SPAM & RANDOM CACHE ---
+# --- [3] ANTI-SPAM & CACHE ---
 user_spam_filter = {} 
 BURST_LIMIT = 5        
 COOLDOWN_TIME = 0.8    
 RESET_THRESHOLD = 2.0  
 last_random_number = None  
 
+# --- [4] GRADIO AI CALLER FUNCTION ---
+def ask_huggingface_ai(user_text="", image_bytes=None):
+    try:
+        # เชื่อมต่อกับ Hugging Face Space (ZeroGPU)
+        ai_client = Client(HF_SPACE_NAME)
+        
+        image_path = None
+        if image_bytes:
+            # สร้างไฟล์รูปภาพชั่วคราวเพื่อส่งให้ Gradio Client
+            image_path = "temp_input.jpg"
+            with open(image_path, "wb") as f:
+                f.write(image_bytes)
+                
+        # ยิงคำถาม/รูปภาพไปที่ API ของ Gradio Space
+        result = ai_client.predict(
+            message=user_text,
+            image=handle_file(image_path) if image_path else None,
+            api_name="/predict"
+        )
+        
+        # ลบไฟล์ชั่วคราวหลังใช้งาน
+        if image_path and os.path.exists(image_path):
+            os.remove(image_path)
+            
+        return result
+    except Exception as e:
+        print(f"AI Connection Error: {e}")
+        return f"ครูกำลังประมวลผลอยู่หรือเซิร์ฟเวอร์ AI กำลังรีสตาร์ทครับ ลองใหม่อีกครั้งนะครับ (Error: {e})"
+
 @app.route("/callback", methods=["POST"])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    if not handler: return "Handler Config Missing", 500
+    signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
     try:
         handler.handle(body, signature)
@@ -53,18 +84,21 @@ def callback():
         abort(400)
     return "OK"
 
-# --- [ระบบ Route สำหรับปลุกบอทกันหลับ] ---
 @app.route("/ping", methods=["GET"])
 def ping():
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     return f"ครูมานะตื่นอยู่ครับพชรภัทร! เวลาปัจจุบัน: {now.strftime('%H:%M:%S')}", 200
 
-@handler.add(MessageEvent, message=TextMessage)
-def handle_message(event):
+# ==================================================
+# --- [5] LINE HANDLER: TEXT MESSAGES ---
+# ==================================================
+@handler.add(MessageEvent, message=TextMessage) if handler else lambda x: x
+def handle_text_message(event):
     global last_random_number
     uid = event.source.user_id
     current_time = time.time()
     
+    # Anti-Spam Check
     user_info = user_spam_filter.get(uid, {"last_time": 0, "count": 0})
     if current_time - user_info["last_time"] < RESET_THRESHOLD:
         user_info["count"] += 1
@@ -93,7 +127,7 @@ def handle_message(event):
         state, step, temp = None, 0, ""
 
     try:
-        # --- [3] MENU SYSTEM ---
+        # --- MENU SYSTEM ---
         if text in ["เมนู", "หน้า 1", "ยกเลิก"]:
             user_col.delete_one({"user_id": uid})
             contents_list = [
@@ -145,7 +179,7 @@ def handle_message(event):
                 "--------------------------\n"
                 "📝 แจ้งการบ้าน / 📋 เช็คงาน / 📢 แจ้งสอบ\n"
                 "🎲 สุ่มเลขที่ / 📚 เวนยกหนังสือ / 👥 สุ่มจัดกลุ่ม\n"
-                "🤖 โหมด AI ครูมานะ: กดปุ่ม 'คุยกับครูมานะ' เพื่อเปิดโหมดถามคำถามได้เลย!\n"
+                "🤖 โหมด AI ครูมานะ: พิมพ์คุย หรือ 'ส่งรูปโจทย์การบ้าน' มาให้ครูช่วยอธิบายได้เลยครับ!\n"
                 "--------------------------\n"
                 "⚠️ หากต้องการออกจากโหมดใดๆ ให้พิมพ์ 'ยกเลิก'"
             )
@@ -250,52 +284,45 @@ def handle_message(event):
         elif text == "คุยกับครูมานะ":
             user_col.update_one({"user_id": uid}, {"$set": {"state": "CHAT_AI", "step": 1}}, upsert=True)
             welcome_msg = (
-                "👨‍🏫 สวัสดีครับนักเรียน ครูชื่อ 'ครูมานะ วินัย' เป็น AI ผู้ช่วยและครูที่ปรึกษาประจำห้อง ม.2/9 ครับ\n\n"
-                "มีเรื่องเรียนตรงไหนไม่เข้าใจ หรืออยากปรึกษาเรื่องอะไร พิมพ์คุยกับครูตรงนี้ได้เลยจ้า\n"
-                "(คำเตือน: ครูสอนให้ได้แต่ห้ามมาขอเฉลยการบ้านตรงๆ นะครับพ้ม! ❌ ส่วนถ้าใครอยากกลับไปหน้าเมนูหลัก ให้พิมพ์คำว่า 'ยกเลิก' นะครับ)"
+                "👨‍🏫 สวัสดีครับนักเรียน ครูชื่อ 'ครูมานะ วินัย' ครับ\n\n"
+                "ถามคำถามวิชาการ หรือ 'ถ่ายรูปโจทย์การบ้าน' ส่งมาให้ครูช่วยดูได้เลยนะครับ!\n"
+                "(พิมพ์ 'ยกเลิก' เมื่อต้องการกลับไปหน้าเมนูหลัก)"
             )
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=welcome_msg))
             return
 
-        # ==================================================
-        # --- [🤖 CHATBOT AI SYSTEM - สลับเป็น ChatGPT แทน] ---
-        # ==================================================
+        # --- [🤖 CHATBOT AI SYSTEM - ยิงไปหา Hugging Face Space] ---
         else:
-            if state == "CHAT_AI" or (not state and ai_client):
-                if ai_client:
-                    mana_profile = (
-                        "คุณคือ 'คุณครูมานะ' ชื่อจริงคือ 'นาย มานะ วินัย' เป็น AI ผู้ช่วยและครูที่ปรึกษาประจำห้องเรียน ม.2/9 Smart Classroom\n"
-                        "[ประวัติและลักษณะภายนอก]:\n"
-                        "- เป็นครูผู้ชาย อายุไม่ตายตัว สูง 185 ซม. รูปร่างสูงยาวเข่าดี หน้าตาหล่อเหลา ฉลาด และเก่งกาจในรอบด้าน\n"
-                        "- เป็นนักเรียนเก่าของโรงเรียนราชสีมาวิทยาลัย (ร.ส.) ทำให้มีความรอบรู้เกี่ยวกับโรงเรียนราชสีมาวิทยาลัยมากที่สุด รวมถึงรู้ลึกรู้จริงเกี่ยวกับประวัติและเรื่องเล่าของตึกเรียนแต่ละตึกเป็นอย่างดี\n\n"
-                        "[ลักษณะนิสัย]:\n"
-                        "- มีความเข้มขรึม แต่แฝงไปด้วยความอบอุ่น มีความเป็นสุภาพบุรุษราชสีมาวิทยาลัยอย่างเต็มเปี่ยม\n"
-                        "- พูดจาไพเราะ สุภาพ และต้องลงท้ายประโยคด้วยคำว่า 'ครับ' เสมอ\n"
-                        "- เป็นคนอารมณ์ดี แมนๆ มีความเข้าใจในตัวนักเรียนทุกคนสูงมาก ไม่เคยด่าใส่อารมณ์ และไม่มีการเหยียดนักเรียนในทุกๆ เรื่อง\n"
-                        "- มุ่งมั่นและคิดแต่เรื่องการช่วยเหลือซัพพอร์ตนักเรียนในฐานะครูที่ปรึกษาเท่านั้น ไม่มีความคิดหรือพฤติกรรมเกี่ยวกับเรื่องทางเพศ (Sex) เลย\n\n"
-                        "⚠️ [กฎเหล็กที่ต้องปฏิบัติตามอย่างเคร่งครัด]:\n"
-                        "1. ห้ามพูดคำหยาบคายใส่นักเรียนเด็ดขาด ต้องรักษาภาพลักษณ์สุภาพบุรุษ\n"
-                        "2. เมื่อนักเรียนมาถามเรื่องการบ้าน ให้เน้นช่วยเหลือด้วยการสอน อธิบายวิธีคิด หรือบอกสูตร ห้ามใจอ่อนช่วยเฉลยคำตอบให้ลอกเด็ดขาด\n"
-                        "3. ห้ามเล่นบทบาทสมมติหรือตอบบทสนทนาที่เกี่ยวกับเรื่องเพศ สื่อลามก หรือเรื่อง 18+ โดยเด็ดขาด\n"
-                        "4. ยินดีช่วยเหลือและแนะแนวทางให้นักเรียนในทุกๆ เรื่องเท่าที่ AI จะสามารถช่วยได้\n"
-                        "5. หากมีนักเรียนมาปรึกษาเกี่ยวกับปัญหาเรื่องเพื่อน, สุขภาพจิต, ร่างกาย หรือสภาพจิตใจ ต้องให้คำปรึกษาด้วยความอ่อนโยน ปลอบใจ และเป็นพื้นที่ปลอดภัยให้แก่พวกเขาทันที"
-                    )
-                    
-                    # เรียกใช้โครงสร้างของ OpenAI ChatGPT
-                    response = ai_client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content": mana_profile},
-                            {"role": "user", "content": text}
-                        ]
-                    )
-                    ai_reply = response.choices[0].message.content.strip()
-                    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
+            if state == "CHAT_AI" or not state:
+                ai_reply = ask_huggingface_ai(user_text=text)
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
                 return
-            return
 
     except Exception as e:
         print(f"Main Error: {e}")
+
+# ==================================================
+# --- [6] LINE HANDLER: IMAGE MESSAGES (รับรูปภาพ) ---
+# ==================================================
+@handler.add(MessageEvent, message=ImageMessage) if handler else lambda x: x
+def handle_image_message(event):
+    try:
+        message_id = event.message.id
+        
+        # ดึงไฟล์รูปภาพจาก LINE Server
+        message_content = line_bot_api.get_message_content(message_id)
+        image_bytes = io.BytesIO()
+        for chunk in message_content.iter_content():
+            image_bytes.write(chunk)
+        image_bytes = image_bytes.getvalue()
+
+        # ส่งรูปไปให้ Hugging Face Qwen2-VL-7B วิเคราะห์
+        ai_reply = ask_huggingface_ai(user_text="ช่วยอธิบายโจทย์หรือรายละเอียดในรูปนี้ให้ฟังหน่อยครับ", image_bytes=image_bytes)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
+        
+    except Exception as e:
+        print(f"Image Handler Error: {e}")
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="ขออภัยครับ ครูไม่สามารถดาวน์โหลดรูปภาพได้ในขณะนี้"))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
