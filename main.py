@@ -72,7 +72,6 @@ last_random_number = None
 # ==================================================
 def ask_huggingface_ai(user_text="", image_bytes=None, image_path=None):
     try:
-        # เก็บชื่อตัวแปร hf_token ไว้ใช้งาน แต่ส่งให้ parameter ชื่อ token= ของ Gradio Client
         hf_token = HF_TOKEN if HF_TOKEN else None
         ai_client = Client(HF_SPACE_NAME, token=hf_token)
         
@@ -111,7 +110,8 @@ def start_self_ping():
         while True:
             if RENDER_APP_URL:
                 try:
-                    target_url = RENDER_APP_URL.rstrip('/') + '/ping'
+                    clean_url = RENDER_APP_URL.strip().rstrip('/')
+                    target_url = clean_url + '/ping'
                     resp = requests.get(target_url, timeout=10)
                     print(f"⏰ [Auto-Ping Status]: {resp.status_code}")
                 except Exception as ex:
@@ -551,7 +551,6 @@ def line_login():
     if not LINE_LOGIN_CLIENT_ID:
         return "กรุณาตั้งค่า LINE_LOGIN_CLIENT_ID ใน Environment Variables ก่อนครับ", 400
     
-    # เคลียร์ URL ให้ชัวร์ว่าไม่มี / เกินมา
     base_url = RENDER_APP_URL.strip().rstrip('/') if RENDER_APP_URL else "https://2-9-smart-bot-h6pg.onrender.com"
     redirect_uri = f"{base_url}/login/line/callback"
     
@@ -561,6 +560,52 @@ def line_login():
         f"&state=12345&scope=profile%20openid"
     )
     return redirect(line_auth_url)
+
+@app.route("/login/line/callback")
+def line_login_callback():
+    code = request.args.get("code")
+    if not code:
+        return "Authorization failed", 400
+
+    base_url = RENDER_APP_URL.strip().rstrip('/') if RENDER_APP_URL else "https://2-9-smart-bot-h6pg.onrender.com"
+    redirect_uri = f"{base_url}/login/line/callback"
+
+    # 1. ขอ Access Token จาก LINE
+    token_url = "https://api.line.me/oauth2/v2.1/token"
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    payload = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": LINE_LOGIN_CLIENT_ID,
+        "client_secret": LINE_LOGIN_CLIENT_SECRET
+    }
+    
+    res = requests.post(token_url, data=payload, headers=headers)
+    res_data = res.json()
+    access_token = res_data.get("access_token")
+
+    if not access_token:
+        return f"Login Error: {res_data.get('error_description', 'Failed to get token')}", 400
+
+    # 2. ดึงข้อมูล Profile ผู้ใช้
+    profile_url = "https://api.line.me/v2/profile"
+    profile_headers = {"Authorization": f"Bearer {access_token}"}
+    profile_res = requests.get(profile_url, headers=profile_headers).json()
+
+    # 3. บันทึกลง Session
+    session["user"] = {
+        "uid": profile_res.get("userId"),
+        "name": profile_res.get("displayName"),
+        "picture": profile_res.get("pictureUrl", "https://via.placeholder.com/150")
+    }
+
+    return redirect(url_for("home"))
+
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect(url_for("home"))
 
 # ==================================================
 # --- [8] LINE WEBHOOK CALLBACK & HANDLERS ---
@@ -604,7 +649,7 @@ def handle_text_message(event):
         # 1. เช็คคำสั่งออกจากโหมด AI / กลับหน้าเมนูหลัก
         exit_keywords = ["ยกเลิก", "ออกจากโหมด", "หน้า 1", "เมนู", "วิธีใช้", "ติดต่อแอดมิน"]
         if text in exit_keywords:
-            if user_col:
+            if user_col is not None:
                 user_col.delete_one({"user_id": uid}) # ล้าง State ออกจาก DB ทันที
             
             if text in ["ยกเลิก", "ออกจากโหมด"]:
@@ -628,14 +673,14 @@ def handle_text_message(event):
 
         # 2. เช็คการเข้าโหมดครูมานะ
         if text in ["คุยกับครูมานะ", "ครูมานะ"]:
-            if user_col:
+            if user_col is not None:
                 user_col.update_one({"user_id": uid}, {"$set": {"state": "ai_chat"}}, upsert=True)
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="สวัสดีครับนักเรียน! มีโจทย์การบ้านข้อไหนสงสัย พิมพ์ถามเข้ามาได้เลยนะครับ\n\n(หากต้องการออกจากโหมดนี้ ให้พิมพ์ว่า 'ยกเลิก' ได้เลยครับ)"))
             return
 
         # 3. ตรวจสอบว่าผู้ใช้อยู่ในโหมด AI หรือไม่
         current_state = None
-        if user_col:
+        if user_col is not None:
             user_doc = user_col.find_one({"user_id": uid})
             if user_doc:
                 current_state = user_doc.get("state")
@@ -647,7 +692,7 @@ def handle_text_message(event):
 
         # 4. คำสั่งเมนูปกติอื่นๆ
         if text == "เช็คงาน":
-            hw_list = list(homework_col.find({})) if homework_col else []
+            hw_list = list(homework_col.find({})) if homework_col is not None else []
             if not hw_list:
                 reply_txt = "🎉 ไม่มีรายการการบ้านค้างในขณะนี้ครับ"
             else:
