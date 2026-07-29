@@ -5,6 +5,7 @@ import random
 import time
 import requests
 import threading
+from bson import ObjectId
 from flask import Flask, request, abort, render_template_string, jsonify, session, redirect, url_for
 
 # MongoDB & Gradio Client
@@ -352,10 +353,15 @@ DASHBOARD_TEMPLATE = """
                     hwBox.innerHTML = '<p class="text-gray-400 text-sm col-span-full text-center py-6">🎉 ไม่มีงานค้างในระบบเลยครับ!</p>';
                 } else {
                     hwBox.innerHTML = data.homework.map(hw => `
-                        <div class="p-4 rounded-xl border border-indigo-100 bg-indigo-50/40 relative animate__animated animate__fadeIn">
-                            <span class="text-xs font-semibold px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 mb-2 inline-block">ครู${hw.teacher}</span>
-                            <p class="font-medium text-gray-800 text-sm mb-1">${hw.info}</p>
-                            <p class="text-xs text-gray-400">บันทึกเมื่อ: ${hw.created_at}</p>
+                        <div class="p-4 rounded-xl border border-indigo-100 bg-indigo-50/40 relative flex justify-between items-start animate__animated animate__fadeIn">
+                            <div>
+                                <span class="text-xs font-semibold px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 mb-2 inline-block">ครู${hw.teacher}</span>
+                                <p class="font-medium text-gray-800 text-sm mb-1">${hw.info}</p>
+                                <p class="text-xs text-gray-400">บันทึกเมื่อ: ${hw.created_at}</p>
+                            </div>
+                            <button onclick="deleteHomework('${hw.id}')" class="text-red-500 hover:text-red-700 p-1 text-sm transition" title="ลบการบ้าน">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
                         </div>
                     `).join('');
                 }
@@ -366,13 +372,40 @@ DASHBOARD_TEMPLATE = """
                     examBox.innerHTML = '<p class="text-gray-400 text-sm col-span-full text-center py-6">✨ ยังไม่มีประกาศสอบครับ</p>';
                 } else {
                     examBox.innerHTML = data.exams.map(ex => `
-                        <div class="p-4 rounded-xl border border-amber-100 bg-amber-50/40 animate__animated animate__fadeIn">
-                            <p class="font-bold text-amber-800 text-sm mb-1">📌 ${ex.subject_info}</p>
-                            <p class="text-xs text-amber-600">⏰ วัน/เวลา: ${ex.date_time}</p>
+                        <div class="p-4 rounded-xl border border-amber-100 bg-amber-50/40 relative flex justify-between items-start animate__animated animate__fadeIn">
+                            <div>
+                                <p class="font-bold text-amber-800 text-sm mb-1">📌 ${ex.subject_info}</p>
+                                <p class="text-xs text-amber-600">⏰ วัน/เวลา: ${ex.date_time}</p>
+                            </div>
+                            <button onclick="deleteExam('${ex.id}')" class="text-red-500 hover:text-red-700 p-1 text-sm transition" title="ลบนัดหมายสอบ">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
                         </div>
                     `).join('');
                 }
             } catch(e) { console.error(e); }
+        }
+
+        // Delete Homework
+        async function deleteHomework(id) {
+            if(!confirm('ยืนยันลบรายการการบ้านนี้ใช่หรือไม่?')) return;
+            await fetch('/api/delete_homework', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id })
+            });
+            loadDashboardData();
+        }
+
+        // Delete Exam
+        async function deleteExam(id) {
+            if(!confirm('ยืนยันลบรายการแจ้งสอบนี้ใช่หรือไม่?')) return;
+            await fetch('/api/delete_exam', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id })
+            });
+            loadDashboardData();
         }
 
         // Add Homework
@@ -509,9 +542,15 @@ def api_dashboard_data():
     hw_list = []
     exam_list = []
     if homework_col is not None:
-        hw_list = list(homework_col.find({}, {"_id": 0}))
+        for h in homework_col.find({}):
+            h['id'] = str(h['_id'])
+            del h['_id']
+            hw_list.append(h)
     if exam_col is not None:
-        exam_list = list(exam_col.find({}, {"_id": 0}))
+        for e in exam_col.find({}):
+            e['id'] = str(e['_id'])
+            del e['_id']
+            exam_list.append(e)
     return jsonify({"homework": hw_list, "exams": exam_list})
 
 @app.route("/api/add_homework", methods=["POST"])
@@ -526,6 +565,15 @@ def api_add_homework():
         })
     return jsonify({"status": "ok"})
 
+@app.route("/api/delete_homework", methods=["POST"])
+def api_delete_homework():
+    if homework_col is not None:
+        data = request.json or {}
+        hw_id = data.get("id")
+        if hw_id:
+            homework_col.delete_one({"_id": ObjectId(hw_id)})
+    return jsonify({"status": "ok"})
+
 @app.route("/api/add_exam", methods=["POST"])
 def api_add_exam():
     if exam_col is not None:
@@ -536,6 +584,15 @@ def api_add_exam():
             "date_time": data.get("date_time", ""),
             "created_at": now.strftime("%Y-%m-%d %H:%M")
         })
+    return jsonify({"status": "ok"})
+
+@app.route("/api/delete_exam", methods=["POST"])
+def api_delete_exam():
+    if exam_col is not None:
+        data = request.json or {}
+        exam_id = data.get("id")
+        if exam_id:
+            exam_col.delete_one({"_id": ObjectId(exam_id)})
     return jsonify({"status": "ok"})
 
 @app.route("/api/chat", methods=["POST"])
@@ -570,7 +627,6 @@ def line_login_callback():
     base_url = RENDER_APP_URL.strip().rstrip('/') if RENDER_APP_URL else "https://2-9-smart-bot-h6pg.onrender.com"
     redirect_uri = f"{base_url}/login/line/callback"
 
-    # 1. ขอ Access Token จาก LINE
     token_url = "https://api.line.me/oauth2/v2.1/token"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     payload = {
@@ -588,12 +644,10 @@ def line_login_callback():
     if not access_token:
         return f"Login Error: {res_data.get('error_description', 'Failed to get token')}", 400
 
-    # 2. ดึงข้อมูล Profile ผู้ใช้
     profile_url = "https://api.line.me/v2/profile"
     profile_headers = {"Authorization": f"Bearer {access_token}"}
     profile_res = requests.get(profile_url, headers=profile_headers).json()
 
-    # 3. บันทึกลง Session
     session["user"] = {
         "uid": profile_res.get("userId"),
         "name": profile_res.get("displayName"),
@@ -650,25 +704,54 @@ def handle_text_message(event):
         exit_keywords = ["ยกเลิก", "ออกจากโหมด", "หน้า 1", "เมนู", "วิธีใช้", "ติดต่อแอดมิน"]
         if text in exit_keywords:
             if user_col is not None:
-                user_col.delete_one({"user_id": uid}) # ล้าง State ออกจาก DB ทันที
+                user_col.delete_one({"user_id": uid}) # ล้าง State ออกจาก DB
             
             if text in ["ยกเลิก", "ออกจากโหมด"]:
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text="ออกจากโหมดคุยกับครูมานะแล้วครับ มีอะไรให้ช่วยเหลือเลือกเมนูได้เลยครับ"))
                 return
 
-            # เมนูหลัก Flex Message
-            contents_list = [
-                {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📝 แจ้งการบ้าน", "text": "แจ้งการบ้าน"}},
-                {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📋 เช็คงานสัปดาห์นี้", "text": "เช็คงาน"}},
-                {"type": "button", "style": "primary", "color": "#E67E22", "action": {"type": "message", "label": "📢 แจ้งสอบ", "text": "แจ้งสอบ"}},
-                {"type": "button", "style": "primary", "color": "#9B59B6", "action": {"type": "message", "label": "🤖 คุยกับครูมานะ", "text": "คุยกับครูมานะ"}}
-            ]
-            menu1 = {
+            base_url = RENDER_APP_URL.strip().rstrip('/') if RENDER_APP_URL else "https://2-9-smart-bot-h6pg.onrender.com"
+
+            # หน้าที่ 1 (เมนูหลัก)
+            card1 = {
                 "type": "bubble",
-                "header": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "🌸 ม.2/9 Menu", "weight": "bold", "size": "xl", "color": "#1DB446"}]},
-                "body": {"type": "box", "layout": "vertical", "spacing": "md", "contents": contents_list}
+                "header": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "🌸 ม.2/9 Menu (หน้า 1/2)", "weight": "bold", "size": "lg", "color": "#1DB446"}]},
+                "body": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "spacing": "md",
+                    "contents": [
+                        {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📝 แจ้งการบ้าน", "text": "แจ้งการบ้าน"}},
+                        {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📋 เช็คงานสัปดาห์นี้", "text": "เช็คงาน"}},
+                        {"type": "button", "style": "primary", "color": "#E67E22", "action": {"type": "message", "label": "📢 แจ้งสอบ", "text": "แจ้งสอบ"}},
+                        {"type": "button", "style": "primary", "color": "#9B59B6", "action": {"type": "message", "label": "🤖 คุยกับครูมานะ", "text": "คุยกับครูมานะ"}}
+                    ]
+                }
             }
-            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Menu", contents=menu1))
+
+            # หน้าที่ 2 (เครื่องมือ + เว็บ)
+            card2 = {
+                "type": "bubble",
+                "header": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "🛠️ เครื่องมือห้องเรียน (หน้า 2/2)", "weight": "bold", "size": "lg", "color": "#33528A"}]},
+                "body": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "spacing": "md",
+                    "contents": [
+                        {"type": "button", "style": "primary", "color": "#3498DB", "action": {"type": "message", "label": "🎲 สุ่มเลขที่", "text": "สุ่มเลขที่"}},
+                        {"type": "button", "style": "primary", "color": "#F39C12", "action": {"type": "message", "label": "📚 เวรยกหนังสือ", "text": "เวรยกหนังสือ"}},
+                        {"type": "button", "style": "primary", "color": "#2ECC71", "action": {"type": "message", "label": "👥 สุ่มแบ่งกลุ่ม", "text": "สุ่มแบ่งกลุ่ม"}},
+                        {"type": "button", "style": "secondary", "action": {"type": "uri", "label": "🌐 เข้าเว็บ Dashboard", "uri": base_url}}
+                    ]
+                }
+            }
+
+            carousel_menu = {
+                "type": "carousel",
+                "contents": [card1, card2]
+            }
+
+            line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="ม.2/9 Menu", contents=carousel_menu))
             return
 
         # 2. เช็คการเข้าโหมดครูมานะ
@@ -700,7 +783,33 @@ def handle_text_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
             return
 
-        # ถ้าไม่ตรงเงื่อนไขใดเลย ให้ส่ง AI ตอบแบบสั้นๆ หรือแจ้งเมนู
+        # คำสั่งสุ่มต่างๆ ในไลน์
+        if text == "สุ่มเลขที่":
+            num = random.randint(1, 40)
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🎲 ผู้โชคดีตอบคำถามคือ เลขที่ {num} ครับ!"))
+            return
+
+        if text == "เวรยกหนังสือ":
+            n1, n2 = random.sample(range(1, 41), 2)
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"📚 เวรยกหนังสือประจำวันนี้คือ เลขที่ {n1} และ เลขที่ {n2} ครับ!"))
+            return
+
+        if text == "สุ่มแบ่งกลุ่ม":
+            students = list(range(1, 41))
+            random.shuffle(students)
+            groups = [[] for _ in range(4)]
+            for idx, s in enumerate(students):
+                groups[idx % 4].append(s)
+            
+            res_str = "👥 ผลการสุ่มแบ่งเป็น 4 กลุ่ม:\n\n"
+            for i, g in enumerate(groups, 1):
+                g.sort()
+                res_str += f"กลุ่ม {i}: {', '.join(map(str, g))}\n"
+            
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res_str))
+            return
+
+        # ถ้าไม่ตรงเงื่อนไขใดเลย ให้ส่ง AI ตอบแบบสั้นๆ
         ai_reply = ask_huggingface_ai(user_text=text)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
 
