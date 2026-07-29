@@ -72,7 +72,9 @@ last_random_number = None
 # ==================================================
 def ask_huggingface_ai(user_text="", image_bytes=None, image_path=None):
     try:
-        ai_client = Client(HF_SPACE_NAME, hf_token=HF_TOKEN if HF_TOKEN else None)
+        # เก็บชื่อตัวแปร hf_token ไว้ใช้งาน แต่ส่งให้ parameter ชื่อ token= ของ Gradio Client
+        hf_token = HF_TOKEN if HF_TOKEN else None
+        ai_client = Client(HF_SPACE_NAME, token=hf_token)
         
         temp_created = False
         if image_bytes and not image_path:
@@ -98,7 +100,7 @@ def ask_huggingface_ai(user_text="", image_bytes=None, image_path=None):
         print(f"AI Connection Error: {err_msg}")
         if "exceeded your ZeroGPU" in err_msg:
             return "ขณะนี้โควต้าประมวลผล AI ชั่วคราวเต็มแล้วครับ นักเรียนโปรดลองใหม่อีกครั้งในอีกสักครู่นะครับ"
-        return f"ครูกำลังประมวลผลอยู่หรือเซิร์ฟเวอร์ AI กำลังรีสตาร์ทครับ ลองใหม่อีกครั้งนะครับ (Error: {err_msg})"
+        return f"ครูกำลังประมวลผลอยู่หรือเซิร์ฟเวอร์ AI กำลังรีสตาร์ทครับ ลองใหม่อีกครั้งนะครับ"
 
 # ==================================================
 # --- [5] AUTO-PING SELF KEEPALIVE ---
@@ -127,7 +129,7 @@ def ping():
     return f"ครูมานะตื่นอยู่ครับ! เวลาปัจจุบัน: {now.strftime('%H:%M:%S')}", 200
 
 # ==================================================
-# --- [6] WEB DASHBOARD UI (Tailwind CSS) ---
+# --- [6] WEB DASHBOARD UI (Tailwind CSS + Animation) ---
 # ==================================================
 DASHBOARD_TEMPLATE = """
 <!DOCTYPE html>
@@ -139,17 +141,18 @@ DASHBOARD_TEMPLATE = """
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
     <style>
-        body { font-family: 'Kanit', sans-serif; background-color: #f1f5f9; }
-        .active-tab { border-b-4 border-blue-600 text-blue-600 font-bold; }
+        body { font-family: 'Kanit', sans-serif; background-color: #f8fafc; }
+        .active-tab { border-b-4 border-indigo-600 text-indigo-600 font-bold; }
     </style>
 </head>
-<body class="pb-12">
+<body class="pb-12 text-gray-800">
 
     <!-- Header / Navbar -->
     <header class="bg-indigo-900 text-white shadow-lg sticky top-0 z-50">
         <div class="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center">
-            <div class="flex items-center space-x-3">
+            <div class="flex items-center space-x-3 transition-transform duration-300 hover:scale-105">
                 <div class="w-10 h-10 rounded-xl bg-amber-400 flex items-center justify-center font-bold text-indigo-950 text-xl border-2 border-white shadow">
                     🏫
                 </div>
@@ -160,13 +163,13 @@ DASHBOARD_TEMPLATE = """
             </div>
             <div>
                 {% if user %}
-                    <div class="flex items-center space-x-2">
-                        <img src="{{ user.picture }}" class="w-8 h-8 rounded-full border-2 border-green-400">
+                    <div class="flex items-center space-x-2 bg-indigo-800 px-3 py-1.5 rounded-xl border border-indigo-700">
+                        <img src="{{ user.picture }}" class="w-7 h-7 rounded-full border border-green-400">
                         <span class="text-xs font-medium hidden sm:inline">{{ user.name }}</span>
-                        <a href="/logout" class="text-xs bg-red-500 hover:bg-red-600 px-2.5 py-1.5 rounded-lg text-white transition">ออก</a>
+                        <a href="/logout" class="text-xs bg-red-500 hover:bg-red-600 px-2.5 py-1 rounded-lg text-white transition duration-200">ออก</a>
                     </div>
                 {% else %}
-                    <a href="/login/line" class="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 font-medium shadow transition">
+                    <a href="/login/line" class="bg-emerald-500 hover:bg-emerald-600 text-white px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 font-medium shadow-md transition duration-300 transform hover:scale-105 active:scale-95">
                         <i class="fa-brands fa-line text-base"></i> ล็อกอิน LINE
                     </a>
                 {% endif %}
@@ -174,14 +177,14 @@ DASHBOARD_TEMPLATE = """
         </div>
 
         <!-- Navigation Tabs -->
-        <div class="bg-white border-b border-gray-200 text-gray-600 text-sm font-medium flex justify-around max-w-6xl mx-auto px-2">
-            <button onclick="switchTab('dashboard')" id="tab-dashboard" class="py-3 px-4 flex items-center gap-2 active-tab">
+        <div class="bg-white border-b border-gray-200 text-gray-500 text-sm font-medium flex justify-around max-w-6xl mx-auto px-2">
+            <button onclick="switchTab('dashboard')" id="tab-dashboard" class="py-3 px-4 flex items-center gap-2 active-tab transition-all duration-200">
                 <i class="fa-solid fa-square-poll-vertical"></i>แดชบอร์ดงาน
             </button>
-            <button onclick="switchTab('tools')" id="tab-tools" class="py-3 px-4 flex items-center gap-2">
+            <button onclick="switchTab('tools')" id="tab-tools" class="py-3 px-4 flex items-center gap-2 transition-all duration-200">
                 <i class="fa-solid fa-dice"></i>เครื่องมือห้องเรียน
             </button>
-            <button onclick="switchTab('ai')" id="tab-ai" class="py-3 px-4 flex items-center gap-2">
+            <button onclick="switchTab('ai')" id="tab-ai" class="py-3 px-4 flex items-center gap-2 transition-all duration-200">
                 <i class="fa-solid fa-robot"></i>คุยกับครูมานะ AI
             </button>
         </div>
@@ -191,20 +194,19 @@ DASHBOARD_TEMPLATE = """
     <main class="max-w-6xl mx-auto px-4 mt-6">
 
         <!-- TAB 1: DASHBOARD -->
-        <div id="section-dashboard" class="space-y-6">
+        <div id="section-dashboard" class="space-y-6 animate__animated animate__fadeIn animate__faster">
             
-            <!-- Add Homework / Exam Quick Actions -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <!-- Card: แจ้งการบ้าน -->
-                <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 transition-all duration-300 hover:shadow-md">
                     <h3 class="font-bold text-gray-800 text-base mb-3 flex items-center gap-2">
                         <i class="fa-solid fa-pen-to-square text-indigo-600"></i> เพิ่มการบ้านใหม่
                     </h3>
                     <form id="addHwForm" class="space-y-3">
-                        <input type="text" id="hwInfo" placeholder="วิชา / รายละเอียดงาน / วันส่ง (เช่น คณิต หน้า 10 ส่ง วันอังคาร)" class="w-full bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500" required>
+                        <input type="text" id="hwInfo" placeholder="วิชา / รายละเอียดงาน / วันส่ง" class="w-full bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500 transition-all duration-200" required>
                         <div class="flex gap-2">
-                            <input type="text" id="hwTeacher" placeholder="ชื่อครูผู้สอน" class="w-1/2 bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500" required>
-                            <button type="submit" class="w-1/2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-xl p-2.5 transition">
+                            <input type="text" id="hwTeacher" placeholder="ชื่อครูผู้สอน" class="w-1/2 bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500 transition-all duration-200" required>
+                            <button type="submit" class="w-1/2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-xl p-2.5 transition-all duration-200 active:scale-95">
                                 <i class="fa-solid fa-plus mr-1"></i> บันทึกงาน
                             </button>
                         </div>
@@ -212,15 +214,15 @@ DASHBOARD_TEMPLATE = """
                 </div>
 
                 <!-- Card: แจ้งสอบ -->
-                <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 transition-all duration-300 hover:shadow-md">
                     <h3 class="font-bold text-gray-800 text-base mb-3 flex items-center gap-2">
                         <i class="fa-solid fa-bullhorn text-amber-500"></i> เพิ่มแจ้งสอบ
                     </h3>
                     <form id="addExamForm" class="space-y-3">
-                        <input type="text" id="examSubject" placeholder="วิชา / เรื่องที่สอบ" class="w-full bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500" required>
+                        <input type="text" id="examSubject" placeholder="วิชา / เรื่องที่สอบ" class="w-full bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500 transition-all duration-200" required>
                         <div class="flex gap-2">
-                            <input type="text" id="examDate" placeholder="วัน/เวลา สอบ (เช่น วันพุธ คาบ 3)" class="w-1/2 bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500" required>
-                            <button type="submit" class="w-1/2 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-xl p-2.5 transition">
+                            <input type="text" id="examDate" placeholder="วัน/เวลา สอบ" class="w-1/2 bg-gray-50 border border-gray-200 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500 transition-all duration-200" required>
+                            <button type="submit" class="w-1/2 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-xl p-2.5 transition-all duration-200 active:scale-95">
                                 <i class="fa-solid fa-plus mr-1"></i> บันทึกตารางสอบ
                             </button>
                         </div>
@@ -234,9 +236,8 @@ DASHBOARD_TEMPLATE = """
                     <h2 class="font-bold text-gray-800 text-lg flex items-center gap-2">
                         <i class="fa-solid fa-list-check text-indigo-600"></i> รายการการบ้านทั้งหมด
                     </h2>
-                    <button onclick="loadDashboardData()" class="text-xs text-indigo-600 hover:underline"><i class="fa-solid fa-rotate-right"></i> รีเฟรช</button>
+                    <button onclick="loadDashboardData()" class="text-xs text-indigo-600 hover:underline flex items-center gap-1 transition"><i class="fa-solid fa-rotate-right"></i> รีเฟรช</button>
                 </div>
-                
                 <div id="homeworkList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     <p class="text-gray-400 text-sm col-span-full text-center py-6">กำลังโหลดข้อมูลการบ้าน...</p>
                 </div>
@@ -255,61 +256,61 @@ DASHBOARD_TEMPLATE = """
         </div>
 
         <!-- TAB 2: CLASSROOM TOOLS -->
-        <div id="section-tools" class="hidden space-y-6">
+        <div id="section-tools" class="hidden space-y-6 animate__animated animate__fadeIn animate__faster">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <!-- Tool 1: สุ่มเลขที่ -->
-                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
-                    <div class="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl">🎲</div>
-                    <h3 class="font-bold text-gray-800 text-base mb-2">สุ่มเลขที่</h3>
-                    <p class="text-xs text-gray-500 mb-4">สุ่มผู้โชคดีตอบคำถาม (1-40)</p>
-                    <div id="randomResult" class="text-4xl font-extrabold text-indigo-600 mb-4 my-2">-</div>
-                    <button onclick="runRandomStudent()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm py-2.5 rounded-xl transition">สุ่มเลย!</button>
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+                    <div class="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl shadow-inner">🎲</div>
+                    <h3 class="font-bold text-gray-800 text-base mb-1">สุ่มเลขที่</h3>
+                    <p class="text-xs text-gray-400 mb-4">สุ่มผู้โชคดีตอบคำถาม (1-40)</p>
+                    <div id="randomResult" class="text-4xl font-extrabold text-indigo-600 mb-4 my-2 h-10 flex items-center justify-center">-</div>
+                    <button onclick="runRandomStudent()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm py-2.5 rounded-xl transition duration-200 active:scale-95 shadow-sm">สุ่มเลย!</button>
                 </div>
 
                 <!-- Tool 2: เวรยกหนังสือ -->
-                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
-                    <div class="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl">📚</div>
-                    <h3 class="font-bold text-gray-800 text-base mb-2">เวรยกหนังสือประจำวัน</h3>
-                    <p class="text-xs text-gray-500 mb-4">สุ่มเพื่อน 2 คนไปยกหนังสือ</p>
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+                    <div class="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl shadow-inner">📚</div>
+                    <h3 class="font-bold text-gray-800 text-base mb-1">เวรยกหนังสือประจำวัน</h3>
+                    <p class="text-xs text-gray-400 mb-4">สุ่มเพื่อน 2 คนไปยกหนังสือ</p>
                     <div id="bookDutyResult" class="text-lg font-bold text-amber-600 mb-4 my-2 h-10 flex items-center justify-center">-</div>
-                    <button onclick="runBookDuty()" class="w-full bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm py-2.5 rounded-xl transition">สุ่มเวรยกหนังสือ</button>
+                    <button onclick="runBookDuty()" class="w-full bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm py-2.5 rounded-xl transition duration-200 active:scale-95 shadow-sm">สุ่มเวรยกหนังสือ</button>
                 </div>
 
                 <!-- Tool 3: สุ่มจัดกลุ่ม -->
-                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
-                    <div class="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl">👥</div>
-                    <h3 class="font-bold text-gray-800 text-base mb-2">สุ่มแบ่งกลุ่ม</h3>
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+                    <div class="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl shadow-inner">👥</div>
+                    <h3 class="font-bold text-gray-800 text-base mb-1">สุ่มแบ่งกลุ่ม</h3>
                     <div class="flex items-center justify-center gap-2 mb-4">
                         <span class="text-xs text-gray-500">จำนวนกลุ่ม:</span>
                         <input type="number" id="groupCount" value="4" min="2" max="10" class="w-16 bg-gray-50 border border-gray-200 text-center text-sm rounded-lg p-1 outline-none">
                     </div>
-                    <button onclick="runRandomGroup()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm py-2.5 rounded-xl transition">สุ่มแบ่งกลุ่ม</button>
+                    <button onclick="runRandomGroup()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm py-2.5 rounded-xl transition duration-200 active:scale-95 shadow-sm">สุ่มแบ่งกลุ่ม</button>
                 </div>
             </div>
 
             <!-- Group Result Box -->
-            <div id="groupResultBox" class="hidden bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <div id="groupResultBox" class="hidden bg-white p-6 rounded-2xl shadow-sm border border-gray-100 animate__animated animate__fadeInUp">
                 <h4 class="font-bold text-gray-800 text-md mb-3"><i class="fa-solid fa-users text-emerald-600"></i> ผลการแบ่งกลุ่ม</h4>
                 <div id="groupResultContainer" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-sm"></div>
             </div>
         </div>
 
         <!-- TAB 3: AI CHATBOT -->
-        <div id="section-ai" class="hidden">
+        <div id="section-ai" class="hidden animate__animated animate__fadeIn animate__faster">
             <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[75vh]">
-                <!-- Chat Window -->
+                <!-- Chat Window Header -->
                 <div class="p-4 bg-indigo-50 border-b border-indigo-100 flex items-center gap-3">
-                    <div class="w-9 h-9 rounded-full bg-indigo-900 text-white flex items-center justify-center font-bold text-sm">ครู</div>
+                    <div class="w-9 h-9 rounded-full bg-indigo-900 text-white flex items-center justify-center font-bold text-sm shadow">ครู</div>
                     <div>
                         <h4 class="font-bold text-gray-800 text-sm">ปรึกษาครูมานะวินัย (AI)</h4>
-                        <p class="text-xs text-gray-500">สอบถามวิชาการ โจทย์การบ้าน ได้ตลอด 24 ชม.</p>
+                        <p class="text-xs text-indigo-500">พร้อมช่วยอธิบายการบ้าน 24 ชั่วโมง</p>
                     </div>
                 </div>
                 
                 <div class="flex-1 overflow-y-auto p-4 space-y-4" id="chatContainer">
-                    <div class="flex items-start gap-2.5">
+                    <div class="flex items-start gap-2.5 animate__animated animate__fadeInLeft animate__faster">
                         <div class="w-8 h-8 rounded-full bg-indigo-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>
-                        <div class="max-w-[80%] p-3.5 bg-white border border-gray-200 rounded-e-2xl rounded-es-2xl shadow-sm text-gray-800 text-sm">
+                        <div class="max-w-[80%] p-3.5 bg-indigo-50/70 border border-indigo-100 rounded-2xl rounded-tl-none text-gray-800 text-sm shadow-sm">
                             สวัสดีครับนักเรียน! มีโจทย์การบ้านข้อไหนสงสัย หรืออยากให้ครูช่วยอธิบายเรื่องอะไร พิมพ์ถามเข้ามาได้เลยนะครับ
                         </div>
                     </div>
@@ -317,8 +318,8 @@ DASHBOARD_TEMPLATE = """
 
                 <div class="p-3 bg-white border-t border-gray-200">
                     <form id="chatForm" class="flex items-center gap-2">
-                        <input type="text" id="messageInput" class="flex-1 bg-gray-100 border border-gray-300 text-gray-900 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500" placeholder="พิมพ์คำถามที่ต้องการถามครู..." required>
-                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white p-2.5 rounded-xl px-4 transition">
+                        <input type="text" id="messageInput" class="flex-1 bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-xl p-2.5 outline-none focus:border-indigo-500 transition" placeholder="พิมพ์คำถามที่ต้องการถามครู..." required>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white p-2.5 rounded-xl px-4 transition-all duration-200 active:scale-95 shadow">
                             <i class="fa-solid fa-paper-plane"></i>
                         </button>
                     </form>
@@ -351,7 +352,7 @@ DASHBOARD_TEMPLATE = """
                     hwBox.innerHTML = '<p class="text-gray-400 text-sm col-span-full text-center py-6">🎉 ไม่มีงานค้างในระบบเลยครับ!</p>';
                 } else {
                     hwBox.innerHTML = data.homework.map(hw => `
-                        <div class="p-4 rounded-xl border border-indigo-100 bg-indigo-50/40 relative">
+                        <div class="p-4 rounded-xl border border-indigo-100 bg-indigo-50/40 relative animate__animated animate__fadeIn">
                             <span class="text-xs font-semibold px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 mb-2 inline-block">ครู${hw.teacher}</span>
                             <p class="font-medium text-gray-800 text-sm mb-1">${hw.info}</p>
                             <p class="text-xs text-gray-400">บันทึกเมื่อ: ${hw.created_at}</p>
@@ -365,7 +366,7 @@ DASHBOARD_TEMPLATE = """
                     examBox.innerHTML = '<p class="text-gray-400 text-sm col-span-full text-center py-6">✨ ยังไม่มีประกาศสอบครับ</p>';
                 } else {
                     examBox.innerHTML = data.exams.map(ex => `
-                        <div class="p-4 rounded-xl border border-amber-100 bg-amber-50/40">
+                        <div class="p-4 rounded-xl border border-amber-100 bg-amber-50/40 animate__animated animate__fadeIn">
                             <p class="font-bold text-amber-800 text-sm mb-1">📌 ${ex.subject_info}</p>
                             <p class="text-xs text-amber-600">⏰ วัน/เวลา: ${ex.date_time}</p>
                         </div>
@@ -406,15 +407,21 @@ DASHBOARD_TEMPLATE = """
 
         // Random Tools
         function runRandomStudent() {
+            const resultBox = document.getElementById('randomResult');
+            resultBox.classList.add('animate__animated', 'animate__bounceIn');
             const num = Math.floor(Math.random() * 40) + 1;
-            document.getElementById('randomResult').innerText = `เลขที่ ${num}`;
+            resultBox.innerText = `เลขที่ ${num}`;
+            setTimeout(() => resultBox.classList.remove('animate__animated', 'animate__bounceIn'), 1000);
         }
 
         function runBookDuty() {
+            const resultBox = document.getElementById('bookDutyResult');
+            resultBox.classList.add('animate__animated', 'animate__fadeIn');
             let n1 = Math.floor(Math.random() * 40) + 1;
             let n2 = Math.floor(Math.random() * 40) + 1;
             while(n1 === n2) n2 = Math.floor(Math.random() * 40) + 1;
-            document.getElementById('bookDutyResult').innerText = `เลขที่ ${n1} และ เลขที่ ${n2}`;
+            resultBox.innerText = `เลขที่ ${n1} และ เลขที่ ${n2}`;
+            setTimeout(() => resultBox.classList.remove('animate__animated', 'animate__fadeIn'), 1000);
         }
 
         function runRandomGroup() {
@@ -441,8 +448,8 @@ DASHBOARD_TEMPLATE = """
 
             const chatContainer = document.getElementById('chatContainer');
             chatContainer.innerHTML += `
-                <div class="flex items-start justify-end gap-2.5">
-                    <div class="max-w-[80%] p-3.5 bg-indigo-600 text-white rounded-s-2xl rounded-ee-2xl text-sm">${text}</div>
+                <div class="flex items-start justify-end gap-2.5 animate__animated animate__fadeInRight animate__faster">
+                    <div class="max-w-[80%] p-3.5 bg-indigo-600 text-white rounded-2xl rounded-tr-none text-sm shadow-sm">${text}</div>
                 </div>
             `;
             input.value = '';
@@ -450,9 +457,14 @@ DASHBOARD_TEMPLATE = """
 
             const loadingId = 'loading-' + Date.now();
             chatContainer.innerHTML += `
-                <div id="${loadingId}" class="flex items-start gap-2.5">
+                <div id="${loadingId}" class="flex items-start gap-2.5 animate__animated animate__fadeIn animate__faster">
                     <div class="w-8 h-8 rounded-full bg-indigo-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>
-                    <div class="p-3 bg-white border border-gray-200 rounded-2xl text-xs text-gray-400">ครูกำลังพิมพ์คำตอบ...</div>
+                    <div class="p-3 bg-gray-100 rounded-2xl text-xs text-gray-500 flex items-center gap-2">
+                        <span>ครูมานะกำลังคิดคำตอบ</span>
+                        <div class="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce"></div>
+                        <div class="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                        <div class="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                    </div>
                 </div>
             `;
             chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -466,9 +478,9 @@ DASHBOARD_TEMPLATE = """
                 const data = await res.json();
                 document.getElementById(loadingId).remove();
                 chatContainer.innerHTML += `
-                    <div class="flex items-start gap-2.5">
+                    <div class="flex items-start gap-2.5 animate__animated animate__fadeInLeft animate__faster">
                         <div class="w-8 h-8 rounded-full bg-indigo-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>
-                        <div class="max-w-[80%] p-3.5 bg-white border border-gray-200 rounded-e-2xl rounded-es-2xl shadow-sm text-gray-800 text-sm">${data.response}</div>
+                        <div class="max-w-[80%] p-3.5 bg-indigo-50/70 border border-indigo-100 rounded-2xl rounded-tl-none text-gray-800 text-sm shadow-sm">${data.response}</div>
                     </div>
                 `;
                 chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -571,6 +583,7 @@ def handle_text_message(event):
     uid = event.source.user_id
     current_time = time.time()
     
+    # Anti-Spam
     user_info = user_spam_filter.get(uid, {"last_time": 0, "count": 0})
     if current_time - user_info["last_time"] < RESET_THRESHOLD:
         user_info["count"] += 1
@@ -587,11 +600,19 @@ def handle_text_message(event):
     user_spam_filter[uid] = user_info
 
     text = event.message.text.strip()
-    now = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
     
     try:
-        if text in ["เมนู", "หน้า 1", "ยกเลิก"]:
-            if user_col: user_col.delete_one({"user_id": uid})
+        # 1. เช็คคำสั่งออกจากโหมด AI / กลับหน้าเมนูหลัก
+        exit_keywords = ["ยกเลิก", "ออกจากโหมด", "หน้า 1", "เมนู", "วิธีใช้", "ติดต่อแอดมิน"]
+        if text in exit_keywords:
+            if user_col:
+                user_col.delete_one({"user_id": uid}) # ล้าง State ออกจาก DB ทันที
+            
+            if text in ["ยกเลิก", "ออกจากโหมด"]:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text="ออกจากโหมดคุยกับครูมานะแล้วครับ มีอะไรให้ช่วยเหลือเลือกเมนูได้เลยครับ"))
+                return
+
+            # เมนูหลัก Flex Message
             contents_list = [
                 {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📝 แจ้งการบ้าน", "text": "แจ้งการบ้าน"}},
                 {"type": "button", "style": "primary", "color": "#05B4B2", "action": {"type": "message", "label": "📋 เช็คงานสัปดาห์นี้", "text": "เช็คงาน"}},
@@ -605,9 +626,40 @@ def handle_text_message(event):
             }
             line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Menu", contents=menu1))
             return
-        else:
+
+        # 2. เช็คการเข้าโหมดครูมานะ
+        if text in ["คุยกับครูมานะ", "ครูมานะ"]:
+            if user_col:
+                user_col.update_one({"user_id": uid}, {"$set": {"state": "ai_chat"}}, upsert=True)
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="สวัสดีครับนักเรียน! มีโจทย์การบ้านข้อไหนสงสัย พิมพ์ถามเข้ามาได้เลยนะครับ\n\n(หากต้องการออกจากโหมดนี้ ให้พิมพ์ว่า 'ยกเลิก' ได้เลยครับ)"))
+            return
+
+        # 3. ตรวจสอบว่าผู้ใช้อยู่ในโหมด AI หรือไม่
+        current_state = None
+        if user_col:
+            user_doc = user_col.find_one({"user_id": uid})
+            if user_doc:
+                current_state = user_doc.get("state")
+
+        if current_state == "ai_chat":
             ai_reply = ask_huggingface_ai(user_text=text)
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
+            return
+
+        # 4. คำสั่งเมนูปกติอื่นๆ
+        if text == "เช็คงาน":
+            hw_list = list(homework_col.find({})) if homework_col else []
+            if not hw_list:
+                reply_txt = "🎉 ไม่มีรายการการบ้านค้างในขณะนี้ครับ"
+            else:
+                reply_txt = "📋 รายการการบ้านทั้งหมด:\n" + "\n".join([f"- {h.get('info')} (ครู{h.get('teacher')})" for h in hw_list])
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_txt))
+            return
+
+        # ถ้าไม่ตรงเงื่อนไขใดเลย ให้ส่ง AI ตอบแบบสั้นๆ หรือแจ้งเมนู
+        ai_reply = ask_huggingface_ai(user_text=text)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
+
     except Exception as e:
         print(f"LINE Handler Error: {e}")
 
