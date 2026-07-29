@@ -549,19 +549,18 @@ def api_chat():
 @app.route("/login/line")
 def line_login():
     if not LINE_LOGIN_CLIENT_ID:
-        return "กรุณาตั้งค่า LINE_LOGIN_CLIENT_ID ก่อนครับ", 400
-    redirect_uri = f"{RENDER_APP_URL.rstrip('/')}/login/line/callback"
+        return "กรุณาตั้งค่า LINE_LOGIN_CLIENT_ID ใน Environment Variables ก่อนครับ", 400
+    
+    # เคลียร์ URL ให้ชัวร์ว่าไม่มี / เกินมา
+    base_url = RENDER_APP_URL.strip().rstrip('/') if RENDER_APP_URL else "https://2-9-smart-bot-h6pg.onrender.com"
+    redirect_uri = f"{base_url}/login/line/callback"
+    
     line_auth_url = (
         f"https://access.line.me/oauth2/v2.1/authorize?response_type=code"
         f"&client_id={LINE_LOGIN_CLIENT_ID}&redirect_uri={redirect_uri}"
         f"&state=12345&scope=profile%20openid"
     )
     return redirect(line_auth_url)
-
-@app.route("/logout")
-def logout():
-    session.pop("user", None)
-    return redirect(url_for("home"))
 
 # ==================================================
 # --- [8] LINE WEBHOOK CALLBACK & HANDLERS ---
