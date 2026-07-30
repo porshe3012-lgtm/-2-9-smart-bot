@@ -35,7 +35,7 @@ RENDER_APP_URL = os.environ.get("RENDER_APP_URL", "")
 LINE_LOGIN_CLIENT_ID = os.environ.get("LINE_LOGIN_CLIENT_ID", "")
 LINE_LOGIN_CLIENT_SECRET = os.environ.get("LINE_LOGIN_CLIENT_SECRET", "")
 
-ADMIN_UID = "U789xxxxYourActualIDxxxx" 
+ADMIN_UID = "porshe3012"
 
 # Initialize LINE Bot API v1
 line_bot_api = LineBotApi(TOKEN) if TOKEN else None
@@ -76,23 +76,11 @@ def ask_huggingface_ai(user_text="", image_bytes=None, image_path=None):
         hf_token = HF_TOKEN if HF_TOKEN else None
         ai_client = Client(HF_SPACE_NAME, token=hf_token)
         
-        temp_created = False
-        if image_bytes and not image_path:
-            image_path = "temp_input.jpg"
-            with open(image_path, "wb") as f:
-                f.write(image_bytes)
-            temp_created = True
-                
-        img_param = handle_file(image_path) if image_path else None
-
+        # สำหรับโมเดล Text-Only (Gemma 2) ส่งเฉพาะข้อความ message
         result = ai_client.predict(
             message=user_text,
-            image=img_param,
             api_name="/predict"
         )
-        
-        if temp_created and os.path.exists(image_path):
-            os.remove(image_path)
             
         return result
     except Exception as e:
