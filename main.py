@@ -69,16 +69,24 @@ RESET_THRESHOLD = 2.0
 last_random_number = None  
 
 # ==================================================
-# --- [4] GRADIO AI CALLER FUNCTION ---
+# --- [4] GRADIO AI CALLER FUNCTION (With History) ---
 # ==================================================
-def ask_huggingface_ai(user_text="", image_bytes=None, image_path=None):
+def ask_huggingface_ai(user_text="", chat_history=None):
     try:
         hf_token = HF_TOKEN if HF_TOKEN else None
         ai_client = Client(HF_SPACE_NAME, token=hf_token)
         
-        # สำหรับโมเดล Text-Only (Gemma 2) ส่งเฉพาะข้อความ message
+        # จัดรูปแบบข้อความส่งให้ Hugging Face โดยแนบประวัติย้อนหลังไปด้วย
+        formatted_messages = ""
+        if chat_history:
+            for turn in chat_history:
+                role = "นักเรียน" if turn.get('role') == 'user' else "ครูมานะ"
+                formatted_messages += f"{role}: {turn.get('content', '')}\n"
+                
+        formatted_messages += f"นักเรียน: {user_text}"
+
         result = ai_client.predict(
-            message=user_text,
+            message=formatted_messages,
             api_name="/predict"
         )
             
@@ -184,7 +192,6 @@ DASHBOARD_TEMPLATE = """
 
         <!-- TAB 1: DASHBOARD -->
         <div id="section-dashboard" class="space-y-6 animate__animated animate__fadeIn animate__faster">
-            
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <!-- Card: แจ้งการบ้าน -->
                 <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 transition-all duration-300 hover:shadow-md">
@@ -241,7 +248,6 @@ DASHBOARD_TEMPLATE = """
                     <p class="text-gray-400 text-sm col-span-full text-center py-6">กำลังโหลดตารางสอบ...</p>
                 </div>
             </div>
-
         </div>
 
         <!-- TAB 2: CLASSROOM TOOLS -->
@@ -288,12 +294,15 @@ DASHBOARD_TEMPLATE = """
         <div id="section-ai" class="hidden animate__animated animate__fadeIn animate__faster">
             <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[75vh]">
                 <!-- Chat Window Header -->
-                <div class="p-4 bg-indigo-50 border-b border-indigo-100 flex items-center gap-3">
-                    <div class="w-9 h-9 rounded-full bg-indigo-900 text-white flex items-center justify-center font-bold text-sm shadow">ครู</div>
-                    <div>
-                        <h4 class="font-bold text-gray-800 text-sm">ปรึกษาครูมานะวินัย (AI)</h4>
-                        <p class="text-xs text-indigo-500">พร้อมช่วยอธิบายการบ้าน 24 ชั่วโมง</p>
+                <div class="p-4 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-full bg-indigo-900 text-white flex items-center justify-center font-bold text-sm shadow">ครู</div>
+                        <div>
+                            <h4 class="font-bold text-gray-800 text-sm">ปรึกษาครูมานะวินัย (AI)</h4>
+                            <p class="text-xs text-indigo-500">พร้อมช่วยอธิบายการบ้าน 24 ชั่วโมง</p>
+                        </div>
                     </div>
+                    <button onclick="clearWebChat()" class="text-xs text-red-500 hover:text-red-700 bg-red-50 px-2.5 py-1 rounded-lg transition"><i class="fa-solid fa-rotate"></i> ล้างแชท</button>
                 </div>
                 
                 <div class="flex-1 overflow-y-auto p-4 space-y-4" id="chatContainer">
@@ -460,7 +469,22 @@ DASHBOARD_TEMPLATE = """
             document.getElementById('groupResultBox').classList.remove('hidden');
         }
 
-        // AI Chat System
+        // --- AI Chat System with History (WEB SIDE) ---
+        let chatHistory = [];
+
+        function clearWebChat() {
+            chatHistory = [];
+            const chatContainer = document.getElementById('chatContainer');
+            chatContainer.innerHTML = `
+                <div class="flex items-start gap-2.5 animate__animated animate__fadeInLeft animate__faster">
+                    <div class="w-8 h-8 rounded-full bg-indigo-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>
+                    <div class="max-w-[80%] p-3.5 bg-indigo-50/70 border border-indigo-100 rounded-2xl rounded-tl-none text-gray-800 text-sm shadow-sm">
+                        ล้างประวัติแชทเรียบร้อยครับ มีโจทย์การบ้านข้อไหนสงสัย พิมพ์ถามเข้ามาใหม่ได้เลยครับ!
+                    </div>
+                </div>
+            `;
+        }
+
         document.getElementById('chatForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const input = document.getElementById('messageInput');
@@ -473,6 +497,10 @@ DASHBOARD_TEMPLATE = """
                     <div class="max-w-[80%] p-3.5 bg-indigo-600 text-white rounded-2xl rounded-tr-none text-sm shadow-sm">${text}</div>
                 </div>
             `;
+            
+            // บันทึกลง history ฝั่งเว็บ
+            chatHistory.push({ role: "user", content: text });
+
             input.value = '';
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
@@ -494,16 +522,21 @@ DASHBOARD_TEMPLATE = """
                 const res = await fetch('/api/chat', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ message: text })
+                    body: JSON.stringify({ message: text, history: chatHistory })
                 });
                 const data = await res.json();
                 document.getElementById(loadingId).remove();
+                
                 chatContainer.innerHTML += `
                     <div class="flex items-start gap-2.5 animate__animated animate__fadeInLeft animate__faster">
                         <div class="w-8 h-8 rounded-full bg-indigo-900 text-white flex items-center justify-center text-xs font-bold shrink-0">ครู</div>
                         <div class="max-w-[80%] p-3.5 bg-indigo-50/70 border border-indigo-100 rounded-2xl rounded-tl-none text-gray-800 text-sm shadow-sm">${data.response}</div>
                     </div>
                 `;
+
+                // บันทึกคำตอบครูลง history
+                chatHistory.push({ role: "assistant", content: data.response });
+
                 chatContainer.scrollTop = chatContainer.scrollHeight;
             } catch(e) {
                 if(document.getElementById(loadingId)) document.getElementById(loadingId).remove();
@@ -587,7 +620,8 @@ def api_delete_exam():
 def api_chat():
     data = request.json or {}
     msg = data.get("message", "")
-    ai_reply = ask_huggingface_ai(user_text=msg)
+    history = data.get("history", []) # รับประวัติย้อนหลังฝั่งเว็บ
+    ai_reply = ask_huggingface_ai(user_text=msg, chat_history=history)
     return jsonify({"response": ai_reply})
 
 # --- LINE LOGIN ---
@@ -692,7 +726,7 @@ def handle_text_message(event):
         exit_keywords = ["ยกเลิก", "ออกจากโหมด", "หน้า 1", "เมนู", "วิธีใช้", "ติดต่อแอดมิน"]
         if text in exit_keywords:
             if user_col is not None:
-                user_col.delete_one({"user_id": uid}) # ล้าง State ออกจาก DB
+                user_col.delete_one({"user_id": uid}) # ล้าง State และ History ออกจาก DB
             
             if text in ["ยกเลิก", "ออกจากโหมด"]:
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text="ออกจากโหมดคุยกับครูมานะแล้วครับ มีอะไรให้ช่วยเหลือเลือกเมนูได้เลยครับ"))
@@ -745,19 +779,35 @@ def handle_text_message(event):
         # 2. เช็คการเข้าโหมดครูมานะ
         if text in ["คุยกับครูมานะ", "ครูมานะ"]:
             if user_col is not None:
-                user_col.update_one({"user_id": uid}, {"$set": {"state": "ai_chat"}}, upsert=True)
+                # รีเซ็ต State และสร้าง history ว่างไว้เริ่มต้น
+                user_col.update_one({"user_id": uid}, {"$set": {"state": "ai_chat", "history": []}}, upsert=True)
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="สวัสดีครับนักเรียน! มีโจทย์การบ้านข้อไหนสงสัย พิมพ์ถามเข้ามาได้เลยนะครับ\n\n(หากต้องการออกจากโหมดนี้ ให้พิมพ์ว่า 'ยกเลิก' ได้เลยครับ)"))
             return
 
         # 3. ตรวจสอบว่าผู้ใช้อยู่ในโหมด AI หรือไม่
         current_state = None
+        chat_history = []
         if user_col is not None:
             user_doc = user_col.find_one({"user_id": uid})
             if user_doc:
                 current_state = user_doc.get("state")
+                chat_history = user_doc.get("history", [])
 
         if current_state == "ai_chat":
-            ai_reply = ask_huggingface_ai(user_text=text)
+            # ส่งคำถามพร้อมประวัติที่คุยกันก่อนหน้าไปให้ AI
+            ai_reply = ask_huggingface_ai(user_text=text, chat_history=chat_history)
+            
+            # บันทึกประวัติการคุยเพิ่มลง MongoDB
+            if user_col is not None:
+                chat_history.append({"role": "user", "content": text})
+                chat_history.append({"role": "assistant", "content": ai_reply})
+                
+                # จำกัดประวัติให้จำแค่ 10 ข้อความล่าสุด เพื่อป้องกัน Context ล้น
+                if len(chat_history) > 10:
+                    chat_history = chat_history[-10:]
+                    
+                user_col.update_one({"user_id": uid}, {"$set": {"history": chat_history}})
+
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
             return
 
@@ -814,7 +864,7 @@ def handle_image_message(event):
             image_bytes.write(chunk)
         image_bytes = image_bytes.getvalue()
 
-        ai_reply = ask_huggingface_ai(user_text="ช่วยอธิบายโจทย์ในรูปนี้ให้หน่อยครับ", image_bytes=image_bytes)
+        ai_reply = ask_huggingface_ai(user_text="ช่วยอธิบายโจทย์ในรูปนี้ให้หน่อยครับ")
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
     except Exception as e:
         print(f"Image Handler Error: {e}")
